@@ -109,11 +109,13 @@ class BackendSession:
             self._runner.cancel()
 
     async def close(self) -> None:
-        if self._runner is not None and not self._runner.done():
-            self._runner.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._runner
-        for future in self._pending.values():
-            if not future.done():
-                future.cancel()
-        self._pending.clear()
+        try:
+            if self._runner is not None and not self._runner.done():
+                self._runner.cancel()
+                with suppress(asyncio.CancelledError):
+                    await self._runner
+        finally:
+            for future in self._pending.values():
+                if not future.done():
+                    future.cancel()
+            self._pending.clear()

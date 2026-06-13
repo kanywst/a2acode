@@ -50,6 +50,7 @@ class _Stream:
     artifact_id: str
     chunks: list[str] = field(default_factory=list)
     pending: str | None = None
+    sent_first: bool = False
     metadata: dict[str, object] = field(default_factory=dict)
 
 
@@ -163,9 +164,10 @@ class ClaudeCodeExecutor(AgentExecutor):
                 [Part(text=text)],
                 artifact_id=stream.artifact_id,
                 name="response",
-                append=len(stream.chunks) > 1,
+                append=stream.sent_first,
                 last_chunk=last,
             )
+            stream.sent_first = True
 
         try:
             async for event in session.drain():
@@ -220,6 +222,10 @@ class ClaudeCodeExecutor(AgentExecutor):
         if stream.pending is not None:
             stream.chunks.append(stream.pending)
             await flush(stream.pending, last=True)
+        elif stream.sent_first:
+            # No new text this turn, but earlier chunks went out — close the
+            # artifact so it is not left without a final chunk.
+            await flush("", last=True)
 
         await self._discard(task_id, session)
         full_text = "".join(stream.chunks) or "(no text output)"
