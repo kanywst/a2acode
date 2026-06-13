@@ -51,12 +51,14 @@ async def test_echo_permission_round_trip():
     request = next(e for e in first if isinstance(e, PermissionRequest))
     assert request.tool_name == "Bash"
     assert not session.done
+    assert session.is_parked
 
     session.resolve(PermissionDecision(request_id=request.request_id, allow=True))
     rest = [e async for e in session.drain()]
     text = "".join(e.text for e in rest if isinstance(e, TextDelta))
 
     assert session.done
+    assert not session.is_parked
     assert text.strip() == "sudo reboot"
     await session.close()
 
@@ -87,6 +89,27 @@ def test_file_changes_from_edit():
     assert changes[0].path == "app.py"
     assert "-x = 1" in changes[0].diff
     assert "+x = 2" in changes[0].diff
+
+
+def test_file_changes_multiedit():
+    changes = file_changes(
+        "MultiEdit",
+        {
+            "file_path": "a.py",
+            "edits": [
+                {"old_string": "a", "new_string": "b"},
+                {"old_string": "c", "new_string": "d"},
+            ],
+        },
+    )
+    assert len(changes) == 1
+    assert "-a" in changes[0].diff
+    assert "-c" in changes[0].diff
+
+
+def test_file_changes_multiedit_malformed_does_not_raise():
+    assert file_changes("MultiEdit", {"file_path": "a.py", "edits": "oops"}) == []
+    assert file_changes("MultiEdit", {"file_path": "a.py", "edits": ["x", 1]}) == []
 
 
 def test_file_changes_ignores_non_edit_tools():

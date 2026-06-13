@@ -37,6 +37,13 @@ class BackendSession:
         self.last_request_id: str | None = None
         self.done = False
 
+    @property
+    def is_parked(self) -> bool:
+        """Whether the run is currently waiting for a permission decision."""
+        return (
+            self.last_request_id is not None and self.last_request_id in self._pending
+        )
+
     def start(self, driver: Callable[[BackendSession], Awaitable[None]]) -> None:
         async def runner() -> None:
             try:
@@ -44,9 +51,11 @@ class BackendSession:
             except asyncio.CancelledError:
                 raise
             except BaseException as exc:  # noqa: BLE001 — relayed to consumer
-                await self._queue.put(_Error(exc))
+                # put_nowait (the queue is unbounded) so a pending cancellation
+                # cannot stop the sentinel from reaching a blocked drain().
+                self._queue.put_nowait(_Error(exc))
             finally:
-                await self._queue.put(_DONE)
+                self._queue.put_nowait(_DONE)
 
         self._runner = asyncio.create_task(runner())
 

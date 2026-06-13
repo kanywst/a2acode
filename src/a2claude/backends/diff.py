@@ -44,14 +44,18 @@ def file_changes(tool_name: str, tool_input: dict[str, Any]) -> list[FileChange]
             str(tool_input.get("old_string", "")),
             str(tool_input.get("new_string", "")),
         )
-    else:  # MultiEdit
+    else:  # MultiEdit — edits may be malformed; tolerate anything non-dict.
+        edits = tool_input.get("edits")
+        if not isinstance(edits, list):
+            return []
         diff = "".join(
             _unified(
                 path,
                 str(edit.get("old_string", "")),
                 str(edit.get("new_string", "")),
             )
-            for edit in tool_input.get("edits", [])
+            for edit in edits
+            if isinstance(edit, dict)
         )
 
     return [FileChange(path=str(path), diff=diff)] if diff else []

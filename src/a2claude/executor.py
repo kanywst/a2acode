@@ -121,6 +121,13 @@ class ClaudeCodeExecutor(AgentExecutor):
             self._live[task_id] = session
         else:
             # Follow-up to an input-required pause: the message is the decision.
+            # Guard against a concurrent message arriving while the task is still
+            # running — resolving and pumping a non-parked session would put two
+            # consumers on the same queue and lose events.
+            if not session.is_parked:
+                raise RuntimeError(
+                    f"task {task_id} is already running and not awaiting input"
+                )
             await updater.start_work()
             session.resolve(self._decision(context, session))
 
