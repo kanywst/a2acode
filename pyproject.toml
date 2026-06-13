@@ -1,0 +1,51 @@
+[project]
+name = "a2claude"
+version = "0.1.0"
+description = "Run Claude Code as an A2A protocol agent server."
+readme = "README.md"
+requires-python = ">=3.13"
+license = "Apache-2.0"
+authors = [{ name = "kanywst" }]
+keywords = ["a2a", "claude-code", "agent", "agent2agent"]
+dependencies = [
+    "a2a-sdk[http-server]>=1.1,<2",
+    "claude-agent-sdk>=0.2.101",
+    "uvicorn>=0.49",
+    "httpx>=0.28",
+    "typer>=0.26",
+]
+
+[project.scripts]
+a2claude = "a2claude.cli:app"
+
+[project.urls]
+Repository = "https://github.com/kanywst/a2claude"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15",
+    "pytest>=9",
+    "pytest-asyncio>=1.4",
+    "mypy>=2.1",
+]
+
+[build-system]
+requires = ["uv_build>=0.10.2,<0.11.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.mypy]
+files = ["src"]
+python_version = "3.13"
+ignore_missing_imports = true
+check_untyped_defs = true

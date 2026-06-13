@@ -1,0 +1,14 @@
+{
+  // Mirrors the project owner's global markdownlint config so CI and editor agree.
+  "config": {
+    "default": true,
+    "MD013": false,
+    "MD024": false,
+    "MD033": { "allowed_elements": ["picture", "source", "img"] },
+    "MD036": false,
+    "MD041": false,
+    "MD060": false
+  },
+  "globs": ["**/*.md"],
+  "ignores": ["_source/**", ".venv/**"]
+}
