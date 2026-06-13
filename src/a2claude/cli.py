@@ -93,8 +93,6 @@ async def _call(text: str, url: str, context: str | None, task: str | None) -> N
     from a2a.client.client import ClientConfig
     from a2a.types import Message, Part, Role, SendMessageRequest
 
-    http = httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=10.0))
-    client = await create_client(url, ClientConfig(streaming=True, httpx_client=http))
     message = Message(
         message_id=uuid4().hex,
         role=Role.ROLE_USER,
@@ -107,38 +105,44 @@ async def _call(text: str, url: str, context: str | None, task: str | None) -> N
 
     ids = {"task": task or "", "context": context or ""}
     streaming = False
-    try:
-        async for event in client.send_message(SendMessageRequest(message=message)):
-            which = event.WhichOneof("payload")
-            if which == "task":
-                t = event.task
-                ids["task"], ids["context"] = t.id, t.context_id
-                typer.echo(f"task {t.id}")
-                typer.echo(f"context {t.context_id}\n")
-            elif which == "status_update":
-                s = event.status_update.status
-                line = _parts_text(s.message.parts) if s.message else ""
-                state = _state_name(s.state)
-                if streaming and state != "working":
-                    typer.echo("")
-                    streaming = False
-                if state == "working" and line:
-                    typer.echo(f"  · {line}")
-                elif state == "input_required":
-                    _render_input_required(line, ids, url)
-                elif state != "working":
-                    meta = _format_meta(s.message) if s.message else ""
-                    typer.echo(f"[{state}] {meta}".rstrip())
-            elif which == "artifact_update":
-                streaming = True
-                typer.echo(_parts_text(event.artifact_update.artifact.parts), nl=False)
-            elif which == "message":
-                typer.echo(_parts_text(event.message.parts))
-    finally:
-        closer = client.close()
-        if closer is not None:
-            await closer
-        await http.aclose()
+    timeout = httpx.Timeout(600.0, connect=10.0)
+    async with httpx.AsyncClient(timeout=timeout) as http:
+        client = await create_client(
+            url, ClientConfig(streaming=True, httpx_client=http)
+        )
+        try:
+            request = SendMessageRequest(message=message)
+            async for event in client.send_message(request):
+                which = event.WhichOneof("payload")
+                if which == "task":
+                    t = event.task
+                    ids["task"], ids["context"] = t.id, t.context_id
+                    typer.echo(f"task {t.id}")
+                    typer.echo(f"context {t.context_id}\n")
+                elif which == "status_update":
+                    s = event.status_update.status
+                    line = _parts_text(s.message.parts) if s.message else ""
+                    state = _state_name(s.state)
+                    if streaming and state != "working":
+                        typer.echo("")
+                        streaming = False
+                    if state == "working" and line:
+                        typer.echo(f"  · {line}")
+                    elif state == "input_required":
+                        _render_input_required(line, ids, url)
+                    elif state != "working":
+                        meta = _format_meta(s.message) if s.message else ""
+                        typer.echo(f"[{state}] {meta}".rstrip())
+                elif which == "artifact_update":
+                    streaming = True
+                    parts = event.artifact_update.artifact.parts
+                    typer.echo(_parts_text(parts), nl=False)
+                elif which == "message":
+                    typer.echo(_parts_text(event.message.parts))
+        finally:
+            closer = client.close()
+            if closer is not None:
+                await closer
 
 
 def _render_input_required(line: str, ids: dict[str, str], url: str) -> None:

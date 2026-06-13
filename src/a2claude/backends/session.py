@@ -28,6 +28,11 @@ class _Error:
 
 _DONE = object()
 
+# The event loop holds only a weak reference to tasks created with
+# create_task; keep a strong one so a runner can't be garbage-collected
+# mid-flight (e.g. after its session is dropped on a client disconnect).
+_RUNNERS: set[asyncio.Task[None]] = set()
+
 
 class BackendSession:
     def __init__(self) -> None:
@@ -58,6 +63,8 @@ class BackendSession:
                 self._queue.put_nowait(_DONE)
 
         self._runner = asyncio.create_task(runner())
+        _RUNNERS.add(self._runner)
+        self._runner.add_done_callback(_RUNNERS.discard)
 
     async def emit(self, event: BackendEvent) -> None:
         await self._queue.put(event)

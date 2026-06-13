@@ -42,6 +42,12 @@ logger = logging.getLogger(__name__)
 
 _ALLOW_WORDS = {"allow", "yes", "y", "approve", "ok", "accept", "grant"}
 
+# Bound the in-memory maps so a long-running server cannot grow without limit
+# (e.g. from many contexts, or tasks left paused on a permission and never
+# answered). Oldest entries are evicted first.
+_MAX_CONTEXTS = 4096
+_MAX_LIVE = 256
+
 
 @dataclass
 class _Stream:
@@ -131,6 +137,7 @@ class ClaudeCodeExecutor(AgentExecutor):
                 context_id=context_id,
                 resume=self._session_ids.get(context_id),
             )
+            await self._evict_if_full()
             session = BackendSession()
             session.start(lambda s: self._backend.drive(s, request))
             self._live[task_id] = session
@@ -197,7 +204,7 @@ class ClaudeCodeExecutor(AgentExecutor):
                 elif isinstance(event, Result):
                     stream.metadata = self._result_metadata(event)
                     if event.session_id:
-                        self._session_ids[context_id] = event.session_id
+                        self._remember_session(context_id, event.session_id)
         except asyncio.CancelledError:
             # Client disconnected / timed out: drop the session and its runner
             # instead of leaking them. Synchronous cleanup — we are cancelled.
@@ -272,6 +279,20 @@ class ClaudeCodeExecutor(AgentExecutor):
             allow=allow,
             message="" if allow else "Denied by A2A caller",
         )
+
+    def _remember_session(self, context_id: str, session_id: str) -> None:
+        self._session_ids[context_id] = session_id
+        while len(self._session_ids) > _MAX_CONTEXTS:
+            oldest = next(iter(self._session_ids))
+            del self._session_ids[oldest]
+
+    async def _evict_if_full(self) -> None:
+        """Drop the oldest live session when at capacity (likely an abandoned
+        input-required task that was never answered)."""
+        while len(self._live) >= _MAX_LIVE:
+            oldest_id = next(iter(self._live))
+            logger.warning("evicting oldest live task %s at capacity", oldest_id)
+            await self._discard(oldest_id, self._live[oldest_id])
 
     async def _discard(self, task_id: str, session: BackendSession) -> None:
         self._live.pop(task_id, None)
