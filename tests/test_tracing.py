@@ -26,7 +26,9 @@ from a2claude.executor import ClaudeCodeExecutor
 @pytest.fixture
 def exporter():
     # A global tracer provider can only be set once per process; clear any
-    # existing one so this test gets its own and does not depend on order.
+    # existing one so this test gets its own and does not depend on order, and
+    # restore the previous one afterwards so other tests are unaffected.
+    prev_provider = getattr(trace, "_TRACER_PROVIDER", None)
     trace._TRACER_PROVIDER = None
     provider = TracerProvider()
     exp = InMemorySpanExporter()
@@ -35,7 +37,7 @@ def exporter():
     # here makes the spans land in our exporter.
     trace.set_tracer_provider(provider)
     yield exp
-    trace._TRACER_PROVIDER = None
+    trace._TRACER_PROVIDER = prev_provider
 
 
 @pytest.mark.filterwarnings("ignore::DeprecationWarning")
