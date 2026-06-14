@@ -112,7 +112,7 @@ A caller that discovers this server only has the agent card to go on. Sign it so
 uv run a2claude serve --sign-key card-signing.pem --sign-kid my-key-1 --sign-alg ES256
 ```
 
-The card is then served with a JWS signature over its canonical form. The key is a PEM private key for asymmetric algorithms (`ES256`, `RS256`) or a shared secret for `HS256`; `--sign-kid` is the key id a verifier uses to look up the matching public key. Unsigned is still the default.
+The card is then served with a JWS signature over its canonical form. `--sign-key` is a path to a file holding the key: a PEM private key for asymmetric algorithms (`ES256`, `RS256`), or a shared secret for `HS256`. `--sign-kid` is the key id a verifier uses to look up the matching public key. Unsigned is still the default.
 
 ## Permissions
 

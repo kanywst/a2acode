@@ -40,8 +40,9 @@ def serve(
     ),
     sign_key: str = typer.Option(
         None,
-        help="Path to a signing key (PEM, or a shared secret) to sign the "
-        "agent card so callers can verify who issued it.",
+        help="Path to a file holding the signing key (a PEM private key, or a "
+        "shared secret for HS256) used to sign the agent card so callers can "
+        "verify who issued it.",
     ),
     sign_kid: str = typer.Option(
         None, help="Key id (kid) recorded in the card signature."
@@ -64,12 +65,17 @@ def serve(
     drv = make_backend(backend, **kwargs)
 
     card_signer = None
+    if sign_kid and not sign_key:
+        raise typer.BadParameter("--sign-key is required when --sign-kid is set")
     if sign_key:
         if not sign_kid:
             raise typer.BadParameter("--sign-kid is required when --sign-key is set")
         from .card import signer_from_key_file
 
-        card_signer = signer_from_key_file(sign_key, kid=sign_kid, alg=sign_alg)
+        try:
+            card_signer = signer_from_key_file(sign_key, kid=sign_kid, alg=sign_alg)
+        except (OSError, ValueError) as e:
+            raise typer.BadParameter(f"invalid --sign-key: {e}") from e
 
     asgi_app = build_app(drv, url=_local_url(host, port), card_signer=card_signer)
     typer.echo(f"a2claude: backend={backend} card={_local_url(host, port)}")

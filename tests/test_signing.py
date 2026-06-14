@@ -49,12 +49,27 @@ def test_signer_from_key_file(tmp_path):
 
 
 def test_build_app_signs_the_served_card(tmp_path):
+    from starlette.testclient import TestClient
+
+    from a2claude.backends import make_backend
+
     key_file = tmp_path / "card.key"
     key_file.write_text(SECRET)
     signer = signer_from_key_file(str(key_file), kid="k1", alg="HS256")
 
-    # The signer is applied to the card the server publishes.
-    from a2claude.backends import make_backend
-
     app = build_app(make_backend("echo"), url="http://x/", card_signer=signer)
-    assert app.routes
+
+    # Fetch the card the server actually publishes and confirm the signer was
+    # applied: an unsigned card would have no signatures here.
+    resp = TestClient(app).get("/.well-known/agent-card.json")
+    assert resp.status_code == 200
+    signatures = resp.json()["signatures"]
+    assert len(signatures) == 1
+    assert signatures[0]["protected"] and signatures[0]["signature"]
+
+
+def test_signer_rejects_empty_key_file(tmp_path):
+    key_file = tmp_path / "empty.key"
+    key_file.write_text("   \n")
+    with pytest.raises(ValueError, match="empty"):
+        signer_from_key_file(str(key_file), kid="k1", alg="HS256")

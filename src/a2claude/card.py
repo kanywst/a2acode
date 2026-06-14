@@ -140,4 +140,6 @@ def signer_from_key_file(
     the server only has to apply it to the card.
     """
     key = Path(path).read_text().strip()
+    if not key:
+        raise ValueError(f"signing key file is empty: {path}")
     return lambda card: sign_card(card, key=key, kid=kid, alg=alg, jku=jku)
