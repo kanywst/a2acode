@@ -13,6 +13,7 @@ exempt while the task endpoints are protected.
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 from collections.abc import Awaitable, Callable
 
@@ -36,9 +37,10 @@ class BearerAuthMiddleware:
         if not token.strip():
             raise ValueError("auth token must not be empty")
         self.app = app
-        # Keep the token as bytes so it compares directly against the raw
-        # header bytes without a decode step.
-        self._token = token.encode("utf-8")
+        # Compare SHA-256 digests rather than the tokens themselves: the
+        # constant-time compare is then always over a fixed 32 bytes, so it
+        # cannot leak the token length, and the raw secret is not kept around.
+        self._token_digest = hashlib.sha256(token.encode("utf-8")).digest()
         self._public = public_prefixes
 
     async def __call__(self, scope: dict, receive: Receive, send: Send) -> None:
@@ -56,12 +58,12 @@ class BearerAuthMiddleware:
     def _authorized(self, scope: dict) -> bool:
         headers = dict(scope.get("headers") or [])
         raw = headers.get(b"authorization", b"")
-        scheme, _, value = raw.partition(b" ")
-        if scheme.lower() != b"bearer":
+        # split(None, 1) tolerates extra whitespace between scheme and token.
+        parts = raw.split(None, 1)
+        if len(parts) != 2 or parts[0].lower() != b"bearer":
             return False
-        # Constant-time compare on raw bytes so a wrong token does not leak its
-        # length/prefix through timing, and no decoding can change the value.
-        return hmac.compare_digest(value.strip(), self._token)
+        presented = hashlib.sha256(parts[1].strip()).digest()
+        return hmac.compare_digest(presented, self._token_digest)
 
     @staticmethod
     async def _reject(send: Send) -> None:
