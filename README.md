@@ -92,6 +92,16 @@ The split keeps the A2A layer independent of how Claude Code is invoked, so a ra
 
 The `claude` backend uses whatever the Claude CLI is configured with. When the server answers on behalf of other agents, that has to be an Anthropic API key (or Bedrock / Vertex). Anthropic does not permit subscription credentials for third-party serving. Set a per-run cost ceiling with `--max-budget-usd`.
 
+## Signed agent cards
+
+A caller that discovers this server only has the agent card to go on. Sign it so the caller can confirm the card came from you and was not swapped in transit:
+
+```bash
+uv run a2claude serve --sign-key card-signing.pem --sign-kid my-key-1 --sign-alg ES256
+```
+
+The card is then served with a JWS signature over its canonical form. The key is a PEM private key for asymmetric algorithms (`ES256`, `RS256`) or a shared secret for `HS256`; `--sign-kid` is the key id a verifier uses to look up the matching public key. Unsigned is still the default.
+
 ## Permissions
 
 A tool that needs approval pauses the task in the A2A `input-required` state instead of being skipped. The caller answers with a follow-up message on the same task:

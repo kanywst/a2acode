@@ -7,6 +7,9 @@ opaque chat box.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from pathlib import Path
+
 from a2a.types import AgentCapabilities, AgentCard, AgentInterface, AgentSkill
 from a2a.utils.constants import PROTOCOL_VERSION_CURRENT, TransportProtocol
 
@@ -91,3 +94,42 @@ def build_card(
         default_input_modes=["text/plain"],
         default_output_modes=["text/plain"],
     )
+
+
+def sign_card(
+    card: AgentCard,
+    *,
+    key: str | bytes,
+    kid: str,
+    alg: str = "ES256",
+    jku: str | None = None,
+) -> AgentCard:
+    """Attach a JWS signature to the agent card.
+
+    A2A signed Agent Cards let a receiving agent verify the card was issued by
+    the domain that owns the key (``kid``), rather than trusting whatever a
+    discovery endpoint happened to return. The signature covers the canonical
+    card minus the ``signatures`` field, so it can be appended in place.
+
+    ``key`` is the private signing material: a PEM string for asymmetric
+    algorithms (ES256, RS256) or a shared secret for HMAC (HS256). ``jku``, if
+    given, is the JWK Set URL a verifier can fetch the public key from.
+    """
+    from a2a.utils.signing import ProtectedHeader, create_agent_card_signer
+
+    header: ProtectedHeader = {"kid": kid, "alg": alg, "jku": jku, "typ": "JOSE"}
+    signer = create_agent_card_signer(signing_key=key, protected_header=header)
+    return signer(card)
+
+
+def signer_from_key_file(
+    path: str, *, kid: str, alg: str = "ES256", jku: str | None = None
+) -> Callable[[AgentCard], AgentCard]:
+    """Build a card-signing function that reads its key from ``path``.
+
+    The file holds a PEM private key (asymmetric algorithms) or a raw shared
+    secret (HMAC). Returned as a closure so the key is read once at startup and
+    the server only has to apply it to the card.
+    """
+    key = Path(path).read_text().strip()
+    return lambda card: sign_card(card, key=key, kid=kid, alg=alg, jku=jku)

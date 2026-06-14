@@ -8,6 +8,7 @@ of holding a stream open.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 
 import httpx
@@ -23,6 +24,7 @@ from a2a.server.tasks import (
     InMemoryPushNotificationConfigStore,
     InMemoryTaskStore,
 )
+from a2a.types import AgentCard
 from starlette.applications import Starlette
 
 from .backends.base import Backend
@@ -30,8 +32,15 @@ from .card import build_card
 from .executor import ClaudeCodeExecutor
 
 
-def build_app(backend: Backend, *, url: str) -> Starlette:
+def build_app(
+    backend: Backend,
+    *,
+    url: str,
+    card_signer: Callable[[AgentCard], AgentCard] | None = None,
+) -> Starlette:
     card = build_card(url, streaming=True, push_notifications=True)
+    if card_signer is not None:
+        card = card_signer(card)
 
     push_config_store = InMemoryPushNotificationConfigStore()
     push_client = httpx.AsyncClient()

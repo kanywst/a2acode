@@ -8,7 +8,7 @@ license = "Apache-2.0"
 authors = [{ name = "kanywst" }]
 keywords = ["a2a", "claude-code", "agent", "agent2agent"]
 dependencies = [
-    "a2a-sdk[http-server]>=1.1,<2",
+    "a2a-sdk[http-server,signing]>=1.1,<2",
     "claude-agent-sdk>=0.2.101",
     "uvicorn>=0.49",
     "httpx>=0.28",

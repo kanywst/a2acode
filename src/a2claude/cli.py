@@ -38,6 +38,17 @@ def serve(
     max_budget_usd: float = typer.Option(
         None, help="Hard cost ceiling per run, in USD."
     ),
+    sign_key: str = typer.Option(
+        None,
+        help="Path to a signing key (PEM, or a shared secret) to sign the "
+        "agent card so callers can verify who issued it.",
+    ),
+    sign_kid: str = typer.Option(
+        None, help="Key id (kid) recorded in the card signature."
+    ),
+    sign_alg: str = typer.Option(
+        "ES256", help="JWS algorithm for the card signature (e.g. ES256, RS256)."
+    ),
 ) -> None:
     """Start the A2A server."""
     from .backends import make_backend
@@ -51,7 +62,16 @@ def serve(
             "max_budget_usd": max_budget_usd,
         }
     drv = make_backend(backend, **kwargs)
-    asgi_app = build_app(drv, url=_local_url(host, port))
+
+    card_signer = None
+    if sign_key:
+        if not sign_kid:
+            raise typer.BadParameter("--sign-kid is required when --sign-key is set")
+        from .card import signer_from_key_file
+
+        card_signer = signer_from_key_file(sign_key, kid=sign_kid, alg=sign_alg)
+
+    asgi_app = build_app(drv, url=_local_url(host, port), card_signer=card_signer)
     typer.echo(f"a2claude: backend={backend} card={_local_url(host, port)}")
     uvicorn.run(asgi_app, host=host, port=port, log_level="info")
 
