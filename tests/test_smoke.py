@@ -152,8 +152,12 @@ def test_card_advertises_jsonrpc_and_rest():
 
 
 def test_card_version_tracks_package_version():
-    from importlib.metadata import version
+    from importlib.metadata import PackageNotFoundError, version
 
     from a2claude.card import build_card
 
-    assert build_card("http://localhost:9100/").version == version("a2claude")
+    try:
+        expected = version("a2claude")
+    except PackageNotFoundError:  # source tree without an install: same fallback
+        expected = "0.0.0"
+    assert build_card("http://localhost:9100/").version == expected
