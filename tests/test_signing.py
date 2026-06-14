@@ -73,3 +73,12 @@ def test_signer_rejects_empty_key_file(tmp_path):
     key_file.write_text("   \n")
     with pytest.raises(ValueError, match="empty"):
         signer_from_key_file(str(key_file), kid="k1", alg="HS256")
+
+
+def test_signer_fails_fast_on_bad_key_alg(tmp_path):
+    # A shared secret is not a valid ES256 key; this must fail when the signer
+    # is built (at startup), not later on the first request.
+    key_file = tmp_path / "card.key"
+    key_file.write_text(SECRET)
+    with pytest.raises(ValueError, match="cannot sign"):
+        signer_from_key_file(str(key_file), kid="k1", alg="ES256")

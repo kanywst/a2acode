@@ -128,10 +128,22 @@ def signer_from_key_file(
     """Build a card-signing function that reads its key from ``path``.
 
     The file holds a PEM private key (asymmetric algorithms) or a raw shared
-    secret (HMAC). Returned as a closure so the key is read once at startup and
-    the server only has to apply it to the card.
+    secret (HMAC). The key is read once, as bytes so a binary secret does not
+    trip a decode error, and the key/algorithm pair is validated up front by
+    signing a throwaway card, so a misconfigured key fails at startup rather
+    than on the first discovery request.
     """
-    key = Path(path).read_text().strip()
+    key = Path(path).read_bytes().strip()
     if not key:
         raise ValueError(f"signing key file is empty: {path}")
-    return lambda card: sign_card(card, key=key, kid=kid, alg=alg, jku=jku)
+
+    def signer(card: AgentCard) -> AgentCard:
+        return sign_card(card, key=key, kid=kid, alg=alg, jku=jku)
+
+    try:
+        signer(build_card("https://validation.invalid/"))
+    except Exception as e:  # noqa: BLE001 - any failure here is a key/alg misconfig
+        raise ValueError(
+            f"cannot sign agent card with the given key and {alg}: {e}"
+        ) from e
+    return signer
