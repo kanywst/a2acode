@@ -2,8 +2,8 @@
 
 Drives Claude Code through the Claude Agent SDK's bidirectional client and
 normalizes its typed message stream into backend events. Tool calls, file edits,
-run cost, and the session id — everything the "text in, text out" wrappers
-discard — are preserved for the A2A layer to map onto the protocol.
+run cost, and the session id: everything the "text in, text out" wrappers
+discard is preserved for the A2A layer to map onto the protocol.
 
 Permission prompts are routed through ``can_use_tool`` into the session's
 ``request_permission``, so the caller approves or denies a tool over A2A instead

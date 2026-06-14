@@ -1,7 +1,7 @@
 """Synthesize unified diffs from Claude Code's file-editing tool calls.
 
 The tool input describes the intended change, so the diff is the proposed edit
-rather than a post-hoc comparison of disk state — which is what a caller wants
+rather than a post-hoc comparison of disk state, which is what a caller wants
 to see streamed while the work is still in progress.
 """
 
@@ -53,7 +53,7 @@ def file_changes(tool_name: str, tool_input: dict[str, Any]) -> list[FileChange]
             _text(tool_input.get("old_string")),
             _text(tool_input.get("new_string")),
         )
-    else:  # MultiEdit — edits may be malformed; tolerate anything non-dict.
+    else:  # MultiEdit: edits may be malformed; tolerate anything non-dict.
         edits = tool_input.get("edits")
         if not isinstance(edits, list):
             return []

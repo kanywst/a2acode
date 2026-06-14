@@ -3,7 +3,7 @@
 Needs no API key and no Claude install. It exists so the server, the protocol
 mapping, and the CLI can be exercised end to end offline. It emits the same
 event shapes a real run produces, and when the prompt contains ``sudo`` it asks
-for permission first — which lets the full ``input-required`` round trip be
+for permission first, which lets the full ``input-required`` round trip be
 verified without a live Claude session.
 """
 

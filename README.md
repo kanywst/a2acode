@@ -4,7 +4,7 @@
 
 Run Claude Code as an [A2A](https://a2aprotocol.ai/) agent server. Other agents
 call it over the protocol; it drives a real Claude Code session in your project
-and streams back the actual work — the tools it runs, the diffs it writes, what
+and streams back the actual work: the tools it runs, the diffs it writes, what
 it costs, and the permissions it needs.
 
 [![CI](https://github.com/kanywst/a2claude/actions/workflows/ci.yml/badge.svg)](https://github.com/kanywst/a2claude/actions/workflows/ci.yml)
@@ -93,8 +93,8 @@ review, test, explain).
 
 A backend turns a prompt into a stream of normalized events. Two ship today:
 
-- `echo` — no dependencies; mirrors the input. For wiring checks and tests.
-- `claude` — drives Claude Code through the Claude Agent SDK.
+- `echo`: no dependencies, mirrors the input. For wiring checks and tests.
+- `claude`: drives Claude Code through the Claude Agent SDK.
 
 The split keeps the A2A layer independent of how Claude Code is invoked, so
 a raw-CLI backend can be added later without touching the server or the
@@ -104,7 +104,7 @@ protocol mapping.
 
 The `claude` backend uses whatever the Claude CLI is configured with. When
 the server answers on behalf of other agents, that has to be an Anthropic API
-key (or Bedrock / Vertex) — Anthropic does not permit subscription
+key (or Bedrock / Vertex). Anthropic does not permit subscription
 credentials for third-party serving. Set a per-run cost ceiling with
 `--max-budget-usd`.
 
@@ -125,16 +125,16 @@ uv run a2claude call "allow" --task <id> --context <id>
 session stays alive across the pause, so it resumes exactly where it stopped.
 
 The server does not inherit your personal Claude settings, so it has no
-pre-approved tool allowlist — every tool that needs approval routes through the
-caller. Read-only actions Claude already treats as safe still run without a
+pre-approved tool allowlist, so every tool that needs approval routes through
+the caller. Read-only actions Claude already treats as safe still run without a
 prompt.
 
 ## Long-running tasks
 
 The agent card advertises push notifications. A caller can register a webhook
 for a task and receive status and artifact updates by HTTP POST instead of
-holding a stream open — useful when a run takes minutes. Streaming and polling
-(`tasks/get`) both work too.
+holding a stream open, which helps when a run takes minutes. Streaming and
+polling (`tasks/get`) both work too.
 
 ## Development
 
@@ -169,4 +169,4 @@ permissions, so it can all be exercised without an API key.
 
 ## License
 
-Apache 2.0 — see [LICENSE](LICENSE).
+Apache 2.0. See [LICENSE](LICENSE).

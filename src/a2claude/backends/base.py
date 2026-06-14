@@ -1,7 +1,7 @@
 """Backend abstraction.
 
 A backend drives Claude Code and yields a normalized stream of events. The
-A2A layer never imports the Claude Agent SDK directly — it only consumes these
+A2A layer never imports the Claude Agent SDK directly; it only consumes these
 events. That keeps the protocol mapping in one place and lets us swap the
 underlying driver (Agent SDK today, raw CLI later) without touching the server.
 

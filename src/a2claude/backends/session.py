@@ -2,7 +2,7 @@
 
 A backend's ``drive`` coroutine runs in a background task and pushes events onto
 the session. The consumer (the executor) reads them with ``drain``, which stops
-either when the run finishes or when it surfaces a permission request — at which
+either when the run finishes or when it surfaces a permission request, at which
 point the background task is parked inside ``request_permission`` waiting for a
 decision. A later ``resolve`` un-parks it. This decoupling is what allows the
 A2A ``input-required`` round trip to span two separate ``execute`` calls while
@@ -55,7 +55,7 @@ class BackendSession:
                 await driver(self)
             except asyncio.CancelledError:
                 raise
-            except BaseException as exc:  # noqa: BLE001 — relayed to consumer
+            except BaseException as exc:  # noqa: BLE001 (relayed to consumer)
                 # put_nowait (the queue is unbounded) so a pending cancellation
                 # cannot stop the sentinel from reaching a blocked drain().
                 self._queue.put_nowait(_Error(exc))
@@ -110,7 +110,7 @@ class BackendSession:
                 return
 
     def abort(self) -> None:
-        """Cancel the background runner without awaiting — safe to call from a
+        """Cancel the background runner without awaiting. Safe to call from a
         cancelled context (e.g. an interrupted ``execute``)."""
         if self._runner is not None and not self._runner.done():
             self._runner.cancel()

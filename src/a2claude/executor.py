@@ -144,7 +144,7 @@ class ClaudeCodeExecutor(AgentExecutor):
         else:
             # Follow-up to an input-required pause: the message is the decision.
             # Guard against a concurrent message arriving while the task is still
-            # running — resolving and pumping a non-parked session would put two
+            # running; resolving and pumping a non-parked session would put two
             # consumers on the same queue and lose events.
             if not session.is_parked:
                 raise RuntimeError(
@@ -207,12 +207,12 @@ class ClaudeCodeExecutor(AgentExecutor):
                         self._remember_session(context_id, event.session_id)
         except asyncio.CancelledError:
             # Client disconnected / timed out: drop the session and its runner
-            # instead of leaking them. Synchronous cleanup — we are cancelled.
+            # instead of leaking them. Synchronous cleanup since we are cancelled.
             self._live.pop(task_id, None)
             self._streams.pop(task_id, None)
             session.abort()
             raise
-        except Exception:  # noqa: BLE001 — surface failure without leaking details
+        except Exception:  # noqa: BLE001 (surface failure without leaking details)
             logger.exception("backend run failed for task %s", task_id)
             await self._discard(task_id, session)
             await updater.failed(
@@ -230,7 +230,7 @@ class ClaudeCodeExecutor(AgentExecutor):
             stream.chunks.append(stream.pending)
             await flush(stream.pending, last=True)
         elif stream.sent_first:
-            # No new text this turn, but earlier chunks went out — close the
+            # No new text this turn, but earlier chunks went out, so close the
             # artifact so it is not left without a final chunk.
             await flush("", last=True)
 

@@ -24,7 +24,7 @@ SKILLS = [
     AgentSkill(
         id="refactor",
         name="Refactoring",
-        description="Restructure existing code without changing behavior — "
+        description="Restructure existing code without changing behavior: "
         "extract functions, rename, split modules.",
         tags=["code", "refactor"],
         examples=["Split this 400-line file into cohesive modules"],
@@ -34,7 +34,7 @@ SKILLS = [
         name="Debugging",
         description="Reproduce, locate, and fix defects, then verify the fix.",
         tags=["code", "debug"],
-        examples=["The auth test fails intermittently — find and fix it"],
+        examples=["The auth test fails intermittently; find and fix it"],
     ),
     AgentSkill(
         id="review",
@@ -72,7 +72,7 @@ def build_card(
     return AgentCard(
         name=name,
         description=description
-        or "Claude Code as an A2A agent — generation, refactoring, "
+        or "Claude Code as an A2A agent: generation, refactoring, "
         "debugging, review, testing, and explanation over a real project "
         "workspace.",
         version=VERSION,
