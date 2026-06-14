@@ -80,12 +80,20 @@ def build_card(
             streaming=streaming,
             push_notifications=push_notifications,
         ),
+        # The server mounts both JSON-RPC and REST (HTTP+JSON) routes, so the
+        # card advertises both bindings; a caller picks whichever its client
+        # speaks instead of assuming JSON-RPC.
         supported_interfaces=[
             AgentInterface(
                 url=url,
                 protocol_binding=TransportProtocol.JSONRPC,
                 protocol_version=PROTOCOL_VERSION_CURRENT,
-            )
+            ),
+            AgentInterface(
+                url=url,
+                protocol_binding=TransportProtocol.HTTP_JSON,
+                protocol_version=PROTOCOL_VERSION_CURRENT,
+            ),
         ],
         skills=SKILLS,
         default_input_modes=["text/plain"],

@@ -138,3 +138,14 @@ async def test_resolve_unknown_request_raises():
 def test_build_app_returns_asgi_app():
     app = build_app(make_backend("echo"), url="http://localhost:9100/")
     assert app.routes
+
+
+def test_card_advertises_jsonrpc_and_rest():
+    from a2a.utils.constants import TransportProtocol
+
+    from a2claude.card import build_card
+
+    card = build_card("http://localhost:9100/")
+    bindings = {iface.protocol_binding for iface in card.supported_interfaces}
+    assert TransportProtocol.JSONRPC in bindings
+    assert TransportProtocol.HTTP_JSON in bindings
