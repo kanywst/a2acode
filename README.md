@@ -145,6 +145,16 @@ The server does not inherit your personal Claude settings, so it has no pre-appr
 
 The agent card advertises push notifications. A caller can register a webhook for a task and receive status and artifact updates by HTTP POST instead of holding a stream open, which helps when a run takes minutes. Streaming and polling (`tasks/get`) both work too.
 
+## Observability
+
+Debugging one agent is hard; debugging a chain of them without traces is worse. Because A2A runs over HTTP, it drops straight into OpenTelemetry: install the extra and the A2A SDK's instrumentation plus a per-task `a2claude.execute` span light up, with W3C trace context propagating across the call so client and server spans share one trace.
+
+```bash
+uv sync --extra telemetry
+```
+
+Tracing is off unless OpenTelemetry is installed, and you configure the exporter the standard way (e.g. `OTEL_EXPORTER_OTLP_ENDPOINT`, or run under `opentelemetry-instrument`). It works against an on-prem or air-gapped collector, so traces never have to leave your network.
+
 ## Development
 
 ```bash

@@ -37,6 +37,7 @@ from .backends.base import (
     ToolUse,
 )
 from .backends.session import BackendSession
+from .tracing import span
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +118,17 @@ class ClaudeCodeExecutor(AgentExecutor):
         self._streams: dict[str, _Stream] = {}
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
+        with span(
+            "a2claude.execute",
+            **{
+                "a2a.task_id": context.task_id or "",
+                "a2a.context_id": context.context_id or "",
+                "a2claude.backend": self._backend.name,
+            },
+        ):
+            await self._execute(context, event_queue)
+
+    async def _execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         task_id, context_id = context.task_id, context.context_id
         assert task_id is not None and context_id is not None
         updater = TaskUpdater(event_queue, task_id, context_id)

@@ -1,0 +1,61 @@
+"""Tracing.
+
+Runs the executor under an in-memory span exporter so the span and its
+attributes are checked without an OTLP collector. opentelemetry-sdk is a dev
+dependency, so this exercises the real (non-no-op) path.
+"""
+
+from __future__ import annotations
+
+import pytest
+from a2a.server.agent_execution import RequestContext
+from a2a.server.context import ServerCallContext
+from a2a.server.events import EventQueue
+from a2a.types import Message, Part, Role, SendMessageRequest
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
+
+from a2claude.backends import make_backend
+from a2claude.executor import ClaudeCodeExecutor
+
+
+@pytest.fixture
+def exporter():
+    provider = TracerProvider()
+    exp = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exp))
+    # The module-level tracer is a proxy until a provider is set; setting it
+    # here makes the spans land in our exporter.
+    trace.set_tracer_provider(provider)
+    return exp
+
+
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+async def test_execute_emits_a_span_with_attributes(exporter):
+    executor = ClaudeCodeExecutor(make_backend("echo"))
+    message = Message(
+        message_id="m1",
+        role=Role.ROLE_USER,
+        parts=[Part(text="hello")],
+        task_id="task-1",
+        context_id="ctx-1",
+    )
+    context = RequestContext(
+        ServerCallContext(),
+        request=SendMessageRequest(message=message),
+        task_id="task-1",
+        context_id="ctx-1",
+    )
+    await executor.execute(context, EventQueue())
+
+    spans = exporter.get_finished_spans()
+    execute_spans = [s for s in spans if s.name == "a2claude.execute"]
+    assert len(execute_spans) == 1
+    attrs = execute_spans[0].attributes
+    assert attrs["a2a.task_id"] == "task-1"
+    assert attrs["a2a.context_id"] == "ctx-1"
+    assert attrs["a2claude.backend"] == "echo"

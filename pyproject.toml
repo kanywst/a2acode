@@ -15,6 +15,11 @@ dependencies = [
     "typer>=0.26",
 ]
 
+[project.optional-dependencies]
+# Distributed tracing. Pulls the A2A SDK's OpenTelemetry instrumentation plus
+# the API/SDK a2claude's own spans need. Install with `a2claude[telemetry]`.
+telemetry = ["a2a-sdk[telemetry]>=1.1,<2"]
+
 [project.scripts]
 a2claude = "a2claude.cli:app"
 
@@ -27,6 +32,8 @@ dev = [
     "pytest>=9",
     "pytest-asyncio>=1.4",
     "mypy>=2.1",
+    # So the test suite can exercise the tracing path with a real exporter.
+    "opentelemetry-sdk>=1.33",
 ]
 
 [build-system]
