@@ -25,6 +25,18 @@ Most adapters that put a coding agent behind A2A flatten everything to text in, 
 
 The mapping is all in `executor.py`. Backends only emit normalized events; they never touch the protocol.
 
+## Where this fits
+
+Anthropic now ships its own ways to run Claude Code beyond the terminal: Claude Code on the web, background agents, cloud-hosted Routines, and the Managed Agents API. Those are the right choice when you want Anthropic to host the run and you live in their ecosystem, and they are typically tied to Anthropic infrastructure and a GitHub-centric flow.
+
+a2claude solves a different problem: making Claude Code a first-class peer on a vendor-neutral [A2A](https://a2aprotocol.ai/) mesh. An orchestrator built on any framework discovers it through its agent card and delegates coding work to it the same way it would to any other A2A agent, and the run happens on infrastructure you control, in a workspace you point it at. Reach for a2claude when:
+
+- another agent (not a human at a prompt) is the caller, and it speaks A2A;
+- you want the run on your own infrastructure and data boundary, not a vendor VM;
+- you are wiring Claude Code into a multi-vendor agent system rather than standardizing on one vendor's hosted stack.
+
+The practical user is the platform team building that mesh, not the individual developer; the developer reaches it through whatever orchestrator the team put in front of it.
+
 ## Requirements
 
 - Python 3.13+
