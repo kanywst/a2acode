@@ -56,8 +56,13 @@ class BearerAuthMiddleware:
         return any(path.startswith(p) for p in self._public)
 
     def _authorized(self, scope: dict) -> bool:
-        headers = dict(scope.get("headers") or [])
-        raw = headers.get(b"authorization", b"")
+        # Scan the headers list for the one we need instead of materializing a
+        # dict on every request.
+        raw = b""
+        for key, value in scope.get("headers") or []:
+            if key == b"authorization":
+                raw = value
+                break
         # split(None, 1) tolerates extra whitespace between scheme and token.
         parts = raw.split(None, 1)
         if len(parts) != 2 or parts[0].lower() != b"bearer":

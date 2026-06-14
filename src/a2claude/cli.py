@@ -88,7 +88,7 @@ def serve(
     if auth_token_file:
         try:
             auth_token = Path(auth_token_file).read_text(encoding="utf-8").strip()
-        except OSError as e:
+        except (OSError, ValueError) as e:
             raise typer.BadParameter(f"invalid --auth-token-file: {e}") from e
         if not auth_token:
             raise typer.BadParameter("--auth-token-file is empty")
