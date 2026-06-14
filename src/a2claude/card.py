@@ -8,6 +8,8 @@ opaque chat box.
 from __future__ import annotations
 
 from collections.abc import Callable
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _package_version
 from pathlib import Path
 
 from a2a.types import (
@@ -23,7 +25,12 @@ from a2a.utils.constants import PROTOCOL_VERSION_CURRENT, TransportProtocol
 # each security requirement that references it.
 BEARER_SCHEME = "bearer"
 
-VERSION = "0.1.0"
+try:
+    # The agent card version tracks the package version, read from installed
+    # metadata so there is one source of truth (pyproject) and it cannot drift.
+    VERSION = _package_version("a2claude")
+except PackageNotFoundError:  # running from a source tree without an install
+    VERSION = "0.0.0"
 
 SKILLS = [
     AgentSkill(

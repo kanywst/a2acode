@@ -149,3 +149,11 @@ def test_card_advertises_jsonrpc_and_rest():
     bindings = {iface.protocol_binding for iface in card.supported_interfaces}
     assert TransportProtocol.JSONRPC in bindings
     assert TransportProtocol.HTTP_JSON in bindings
+
+
+def test_card_version_tracks_package_version():
+    from importlib.metadata import version
+
+    from a2claude.card import build_card
+
+    assert build_card("http://localhost:9100/").version == version("a2claude")
