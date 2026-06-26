@@ -179,9 +179,9 @@ class _BridgeClient(Client):
         text = await asyncio.to_thread(target.read_text, encoding="utf-8")
         if line is not None or limit is not None:
             lines = text.splitlines(keepends=True)
-            # A non-positive line number would slice from the end; clamp to 0.
+            # A non-positive line/limit would slice from the end; clamp both.
             start = (line - 1) if (line and line > 0) else 0
-            end = (start + limit) if limit is not None else None
+            end = (start + max(0, limit)) if limit is not None else None
             text = "".join(lines[start:end])
         return s.ReadTextFileResponse(content=text)
 
