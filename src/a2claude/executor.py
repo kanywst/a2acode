@@ -117,6 +117,11 @@ class ClaudeCodeExecutor(AgentExecutor):
         self._live: dict[str, BackendSession] = {}
         # task_id -> response-stream state, kept across permission pauses.
         self._streams: dict[str, _Stream] = {}
+        # Serializes capacity eviction with new-session registration so a burst
+        # of concurrent first-turn requests cannot each see a slot freed by one
+        # eviction and collectively overshoot _MAX_LIVE. Uncontended below
+        # capacity, where _evict_if_full returns without awaiting.
+        self._admit_lock = asyncio.Lock()
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         # span() drops None-valued attributes, so no fallbacks are needed; the
@@ -152,10 +157,11 @@ class ClaudeCodeExecutor(AgentExecutor):
                 context_id=context_id,
                 resume=self._session_ids.get(context_id),
             )
-            await self._evict_if_full()
-            session = BackendSession()
-            session.start(lambda s: self._backend.drive(s, request))
-            self._live[task_id] = session
+            async with self._admit_lock:
+                await self._evict_if_full()
+                session = BackendSession()
+                session.start(lambda s: self._backend.drive(s, request))
+                self._live[task_id] = session
         else:
             # Follow-up to an input-required pause: the message is the decision.
             # Guard against a concurrent message arriving while the task is still
@@ -317,10 +323,11 @@ class ClaudeCodeExecutor(AgentExecutor):
         Only when nothing is parked do we fall back to the oldest entry.
         """
         while len(self._live) >= _MAX_LIVE:
-            victim = next(
-                (tid for tid, s in self._live.items() if s.is_parked),
-                next(iter(self._live)),
-            )
+            # Fall back lazily to the oldest entry: passing next(iter(...)) as the
+            # default would evaluate it even when a parked session is found.
+            victim = next((tid for tid, s in self._live.items() if s.is_parked), None)
+            if victim is None:
+                victim = next(iter(self._live))
             logger.warning("evicting live task %s at capacity", victim)
             await self._discard(victim, self._live[victim])
 
