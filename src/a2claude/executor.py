@@ -45,7 +45,7 @@ _ALLOW_WORDS = {"allow", "yes", "y", "approve", "ok", "accept", "grant"}
 
 # Bound the in-memory maps so a long-running server cannot grow without limit
 # (e.g. from many contexts, or tasks left paused on a permission and never
-# answered). Oldest entries are evicted first.
+# answered). The least-recently-used entries are evicted first.
 _MAX_CONTEXTS = 4096
 _MAX_LIVE = 256
 
@@ -295,6 +295,11 @@ class ClaudeCodeExecutor(AgentExecutor):
         )
 
     def _remember_session(self, context_id: str, session_id: str) -> None:
+        # Re-insert so the most recently used context moves to the end of the
+        # dict: a plain reassignment keeps an existing key in its original
+        # position, which would let an actively reused context be evicted before
+        # an idle, more-recently-created one. Pop-then-set makes eviction LRU.
+        self._session_ids.pop(context_id, None)
         self._session_ids[context_id] = session_id
         while len(self._session_ids) > _MAX_CONTEXTS:
             oldest = next(iter(self._session_ids))
