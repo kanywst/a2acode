@@ -41,6 +41,10 @@ class BackendSession:
         self._runner: asyncio.Task[None] | None = None
         self.last_request_id: str | None = None
         self.done = False
+        # Set when the executor drops this session to free a capacity slot, so
+        # the session's own consumer can fail its task instead of completing it
+        # with whatever partial output it had buffered.
+        self.evicted = False
 
     @property
     def is_parked(self) -> bool:

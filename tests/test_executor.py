@@ -92,3 +92,47 @@ async def test_eviction_falls_back_to_oldest_when_none_parked(monkeypatch):
     finally:
         await first.close()
         await second.close()
+
+
+class _RecordingUpdater:
+    """Captures the terminal call _pump makes, without a real event queue."""
+
+    def __init__(self) -> None:
+        self.did_fail = False
+        self.did_complete = False
+
+    def new_agent_message(self, parts, metadata=None):
+        return parts
+
+    async def add_artifact(self, *_args, **_kwargs):  # pragma: no cover - unused here
+        pass
+
+    async def update_status(self, *_args, **_kwargs):  # pragma: no cover - unused
+        pass
+
+    async def failed(self, message=None):
+        self.did_fail = True
+
+    async def complete(self, message=None):
+        self.did_complete = True
+
+
+async def test_pump_fails_an_evicted_session():
+    # A session that finished (its runner returned, queuing the done sentinel)
+    # but was flagged evicted: _pump must fail the task, not complete it with the
+    # partial buffer.
+    async def _noop(_session):
+        return
+
+    session = BackendSession()
+    session.start(_noop)
+    session.evicted = True
+
+    executor = ClaudeCodeExecutor(make_backend("echo"))
+    updater = _RecordingUpdater()
+    try:
+        await executor._pump(updater, "task-x", "ctx-x", session)
+        assert updater.did_fail
+        assert not updater.did_complete
+    finally:
+        await session.close()

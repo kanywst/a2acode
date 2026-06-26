@@ -46,7 +46,8 @@ _ALLOW_WORDS = {"allow", "yes", "y", "approve", "ok", "accept", "grant"}
 # Bound the in-memory maps so a long-running server cannot grow without limit
 # (e.g. from many contexts, or tasks left paused on a permission and never
 # answered). The continuity cache (_MAX_CONTEXTS) evicts its least-recently-used
-# entry; the live-session map (_MAX_LIVE) evicts the oldest entry.
+# entry; the live-session map (_MAX_LIVE) evicts a parked session first, else the
+# oldest entry.
 _MAX_CONTEXTS = 4096
 _MAX_LIVE = 256
 
@@ -247,6 +248,18 @@ class ClaudeCodeExecutor(AgentExecutor):
             # Paused on a permission request; keep the stream for the follow-up.
             return
 
+        if session.evicted:
+            # The session was dropped to free a capacity slot while still
+            # running, so its drain ended on the cancellation sentinel rather
+            # than a real result. Fail the task instead of presenting the partial
+            # buffer as a completed run.
+            await updater.failed(
+                message=updater.new_agent_message(
+                    [Part(text="Task evicted to free server capacity.")]
+                )
+            )
+            return
+
         if stream.pending is not None:
             stream.chunks.append(stream.pending)
             await flush(stream.pending, last=True)
@@ -318,9 +331,9 @@ class ClaudeCodeExecutor(AgentExecutor):
         Prefer evicting a parked session (an input-required task the caller
         abandoned without answering) over one still actively running: a parked
         task's ``_pump`` has already returned, so dropping it just closes a
-        stalled session, whereas discarding a running one would feed its blocked
-        ``_pump`` the done sentinel and complete the task with partial output.
-        Only when nothing is parked do we fall back to the oldest entry.
+        stalled session. Only when nothing is parked do we fall back to the
+        oldest entry, which is a running task; mark it evicted so its ``_pump``
+        fails the task rather than completing it with partial output.
         """
         while len(self._live) >= _MAX_LIVE:
             # Fall back lazily to the oldest entry: passing next(iter(...)) as the
@@ -329,7 +342,9 @@ class ClaudeCodeExecutor(AgentExecutor):
             if victim is None:
                 victim = next(iter(self._live))
             logger.warning("evicting live task %s at capacity", victim)
-            await self._discard(victim, self._live[victim])
+            session = self._live[victim]
+            session.evicted = True
+            await self._discard(victim, session)
 
     async def _discard(self, task_id: str, session: BackendSession) -> None:
         self._live.pop(task_id, None)
