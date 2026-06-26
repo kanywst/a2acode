@@ -20,6 +20,27 @@ import uvicorn
 app = typer.Typer(add_completion=False, help="Run Claude Code as an A2A server.")
 
 
+def _validate_permission_mode(value: str | None) -> None:
+    """Reject an invalid --permission-mode at startup.
+
+    Without this the bad value flows into ClaudeAgentOptions and only surfaces as
+    a generic "Claude Code run failed" on the first request, after the server is
+    already up. The valid set is read from the SDK's own literal so it cannot
+    drift; the import stays lazy so the echo backend needs no SDK at hand.
+    """
+    if value is None:
+        return
+    from typing import get_args
+
+    from claude_agent_sdk import PermissionMode
+
+    valid = get_args(PermissionMode)
+    if value not in valid:
+        raise typer.BadParameter(
+            f"invalid --permission-mode {value!r}; expected one of {', '.join(valid)}"
+        )
+
+
 def _local_url(host: str, port: int) -> str:
     shown = "localhost" if host in ("0.0.0.0", "::") else host
     return f"http://{shown}:{port}/"
@@ -61,6 +82,8 @@ def serve(
 
     from .backends import make_backend
     from .server import build_app
+
+    _validate_permission_mode(permission_mode)
 
     kwargs: dict[str, object] = {}
     if backend == "claude":
