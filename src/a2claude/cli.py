@@ -28,15 +28,19 @@ def _validate_permission_mode(value: str | None) -> None:
     already up. The valid set is read from the SDK's own literal so it cannot
     drift; the import stays lazy so the echo backend needs no SDK at hand.
 
-    If a future SDK changes PermissionMode from a Literal to some other form,
-    get_args returns an empty tuple; skip validation rather than reject every
-    value, leaving the SDK itself to reject a genuinely bad one.
+    Skip validation rather than block startup when the accepted set cannot be
+    determined: the SDK absent (echo without it installed), or PermissionMode no
+    longer a Literal so get_args returns an empty tuple. In both cases the SDK
+    itself still rejects a genuinely bad value at run time.
     """
     if value is None:
         return
     from typing import get_args
 
-    from claude_agent_sdk import PermissionMode
+    try:
+        from claude_agent_sdk import PermissionMode
+    except ImportError:
+        return
 
     valid = get_args(PermissionMode)
     if valid and value not in valid:
