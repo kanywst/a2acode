@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-a2claude runs Claude Code as an [A2A](https://a2aprotocol.ai/) protocol agent server. Other agents discover it through its agent card and delegate coding work over the protocol; it drives a real Claude Code session and streams the structured work (tool calls, file diffs, cost, session continuity) back — not just flattened text in / text out.
+a2claude serves a coding agent over the [A2A](https://a2aprotocol.ai/) protocol. Other agents discover it through its agent card and delegate coding work; it drives a real coding-agent session and streams the structured work (tool calls, file diffs, permission requests, cost, session continuity) back — not just flattened text in / text out.
+
+It is a **bridge between two interop standards**: it speaks Zed's [Agent Client Protocol](https://agentclientprotocol.com) (ACP) to the coding agent (Claude Code, Gemini CLI, Codex, OpenHands, ... — a launch-command choice) and A2A to the caller. The default `acp` backend makes the agent vendor-neutral; a `claude` backend (Claude Agent SDK, no subprocess) and an `echo` backend also ship.
 
 ## Commands
 
@@ -30,7 +32,7 @@ uv run a2claude call "fix the failing test"
 
 ## Architecture
 
-The core idea: a **backend** drives Claude Code and yields a normalized event stream; the **executor** is the only place that knows A2A. Backends never import the A2A SDK, and the executor never imports the Claude Agent SDK. This split lets a new driver (a raw-CLI backend) be added without touching the protocol mapping.
+The core idea: a **backend** drives a coding agent and yields a normalized event stream; the **executor** is the only place that knows A2A. Backends never import the A2A SDK, and the executor never imports an agent SDK (neither the ACP nor the Claude SDK). This split lets a new driver be added without touching the protocol mapping.
 
 Data flows in one direction:
 
@@ -39,9 +41,12 @@ CLI / A2A caller
     -> server.py        Starlette app: JSON-RPC + REST routes, agent card, push, auth
     -> executor.py      ClaudeCodeExecutor: maps backend events <-> A2A task lifecycle
     -> backends/        a backend emits normalized BackendEvents via a BackendSession
-        -> claude.py    drives the Claude Agent SDK (ClaudeSDKClient)
+        -> acp.py       drives any ACP agent as a subprocess (default; agent-neutral)
+        -> claude.py    drives the Claude Agent SDK directly (ClaudeSDKClient)
         -> echo.py      dependency-free mirror, for tests and offline wiring checks
 ```
+
+The `acp` backend is the headline: ACP's `session/update` stream, diff content, and `session/request_permission` map almost one-to-one onto the event vocabulary below, so vendor-neutrality is a launch-command choice rather than a backend per agent. ACP itself targets human-driven editors; a2claude's value is exposing an ACP agent to *remote A2A callers* with the permission round-trip and cost preserved.
 
 ### The event vocabulary (`backends/base.py`)
 
@@ -74,10 +79,10 @@ The server does **not** load the developer's personal Claude settings (`setting_
 
 ## Conventions
 
-- **Keep the layering intact.** If you reach for `claude_agent_sdk` outside `backends/claude.py`, or for `a2a.*` inside a backend, that's the wrong layer.
-- **`events_from_message` and `diff.py` are pure and side-effect free** so the SDK-message translation is unit-testable without a live Claude session. Keep them that way.
+- **Keep the layering intact.** If you reach for `acp`/`claude_agent_sdk` outside their own backend module, or for `a2a.*` inside a backend, that's the wrong layer.
+- **The translation functions are pure and side-effect free** — `events_from_message` (claude), `events_from_update` + `select_option` (acp), and `diff.py` — so the protocol mapping is unit-testable without a live agent. Keep them that way; stateful concerns (cost capture, permission parking) live in the backend's `Client`/`drive`, not the translator.
 - Python 3.13+, full type hints, `from __future__ import annotations`. Ruff enforces `E, F, I, UP, B, SIM` at line length 88.
-- The `claude` backend is imported lazily (`make_backend`) so `echo` works without the Agent SDK's runtime deps. New optional backends should follow the same lazy pattern.
+- The `acp` and `claude` backends are imported lazily (`make_backend`) so `echo` works without their runtime deps. The Claude SDK is an optional extra (`a2claude[claude]`). New optional backends should follow the same lazy pattern.
 
 ## Reference material
 
