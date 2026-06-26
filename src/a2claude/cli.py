@@ -27,6 +27,10 @@ def _validate_permission_mode(value: str | None) -> None:
     a generic "Claude Code run failed" on the first request, after the server is
     already up. The valid set is read from the SDK's own literal so it cannot
     drift; the import stays lazy so the echo backend needs no SDK at hand.
+
+    If a future SDK changes PermissionMode from a Literal to some other form,
+    get_args returns an empty tuple; skip validation rather than reject every
+    value, leaving the SDK itself to reject a genuinely bad one.
     """
     if value is None:
         return
@@ -35,7 +39,7 @@ def _validate_permission_mode(value: str | None) -> None:
     from claude_agent_sdk import PermissionMode
 
     valid = get_args(PermissionMode)
-    if value not in valid:
+    if valid and value not in valid:
         raise typer.BadParameter(
             f"invalid --permission-mode {value!r}; expected one of {', '.join(valid)}"
         )
