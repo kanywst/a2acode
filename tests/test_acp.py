@@ -193,6 +193,9 @@ async def test_read_with_line_and_limit(tmp_path):
     # A non-positive line number must not slice from the end.
     resp = await client.read_text_file(str(target), "sess", line=0, limit=1)
     assert resp.content == "l1\n"
+    # A negative limit must not slice from the end; it yields nothing.
+    resp = await client.read_text_file(str(target), "sess", line=1, limit=-1)
+    assert resp.content == ""
 
 
 @pytest.mark.asyncio
