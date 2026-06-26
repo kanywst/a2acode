@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shlex
 from uuid import uuid4
 
 import httpx
@@ -122,7 +123,7 @@ def serve(
     if backend == "acp":
         kwargs = {"agent": agent, "cwd": cwd}
         if agent_command:
-            parts = agent_command.split()
+            parts = shlex.split(agent_command)
             kwargs["command"], kwargs["args"] = parts[0], parts[1:]
         card_name = _AGENT_CARD_NAMES.get(agent, agent.capitalize())
     elif backend == "claude":

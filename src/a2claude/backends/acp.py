@@ -103,7 +103,7 @@ def _file_changes(content: Sequence[object] | None) -> Iterator[FileChange]:
         if isinstance(item, s.FileEditToolCallContent):
             yield FileChange(
                 path=item.path,
-                diff=unified_diff(item.path, item.old_text or "", item.new_text),
+                diff=unified_diff(item.path, item.old_text or "", item.new_text or ""),
             )
 
 
@@ -116,9 +116,22 @@ class _BridgeClient(Client):
     caller answers.
     """
 
-    def __init__(self, session: BackendSession) -> None:
+    def __init__(self, session: BackendSession, cwd: str = ".") -> None:
         self._session = session
+        # Resolved workspace root: every fs read/write is confined under it so a
+        # buggy or hostile agent can't reach arbitrary files via the capability
+        # we advertise. ACP paths are absolute, but we still contain them.
+        self._cwd = Path(cwd).resolve()
         self.cost_usd: float | None = None
+
+    def _safe_path(self, path: str) -> Path:
+        target = Path(path)
+        if not target.is_absolute():
+            target = self._cwd / target
+        target = target.resolve()
+        if not target.is_relative_to(self._cwd):
+            raise PermissionError(f"path escapes workspace {self._cwd}: {path!r}")
+        return target
 
     async def session_update(self, session_id: str, update: Any, **_: Any) -> None:
         if isinstance(update, s.UsageUpdate) and update.cost is not None:
@@ -159,10 +172,11 @@ class _BridgeClient(Client):
     ) -> s.ReadTextFileResponse:
         # We advertise fs.readTextFile, so serve reads from disk. There are no
         # unsaved editor buffers on a server; the file on disk is the truth.
-        text = Path(path).read_text(encoding="utf-8")
+        text = self._safe_path(path).read_text(encoding="utf-8")
         if line is not None or limit is not None:
             lines = text.splitlines(keepends=True)
-            start = (line - 1) if line else 0
+            # A non-positive line number would slice from the end; clamp to 0.
+            start = (line - 1) if (line and line > 0) else 0
             end = (start + limit) if limit is not None else None
             text = "".join(lines[start:end])
         return s.ReadTextFileResponse(content=text)
@@ -170,7 +184,7 @@ class _BridgeClient(Client):
     async def write_text_file(
         self, content: str, path: str, session_id: str, **_: Any
     ) -> None:
-        target = Path(path)
+        target = self._safe_path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
         return None
@@ -212,7 +226,7 @@ class ACPBackend:
         # optional overrides; we advertise no terminal capability, so the agent
         # never calls them. mypy reads the empty bodies as abstract, hence the
         # scoped ignore.
-        client = _BridgeClient(session)  # type: ignore[abstract]
+        client = _BridgeClient(session, self.cwd)  # type: ignore[abstract]
         async with spawn_agent_process(
             client, self.command, *self.args, env=self.env, cwd=self.cwd
         ) as (conn, _process):

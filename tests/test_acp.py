@@ -155,6 +155,47 @@ async def test_request_permission_cancels_when_no_matching_option():
 
 
 @pytest.mark.asyncio
+async def test_write_and_read_within_workspace(tmp_path):
+    session = _FakeSession(PermissionDecision(request_id="x", allow=True))
+    client = _BridgeClient(session, str(tmp_path))  # type: ignore[arg-type]
+    target = tmp_path / "sub" / "a.txt"
+
+    await client.write_text_file("hello\n", str(target), "sess")
+    assert target.read_text() == "hello\n"
+    resp = await client.read_text_file(str(target), "sess")
+    assert resp.content == "hello\n"
+
+
+@pytest.mark.asyncio
+async def test_read_outside_workspace_is_rejected(tmp_path):
+    session = _FakeSession(PermissionDecision(request_id="x", allow=True))
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    secret = tmp_path / "secret.txt"
+    secret.write_text("top secret\n")
+    client = _BridgeClient(session, str(workspace))  # type: ignore[arg-type]
+
+    with pytest.raises(PermissionError):
+        await client.read_text_file(str(secret), "sess")
+    with pytest.raises(PermissionError):
+        await client.write_text_file("x", str(tmp_path / "escape.txt"), "sess")
+
+
+@pytest.mark.asyncio
+async def test_read_with_line_and_limit(tmp_path):
+    session = _FakeSession(PermissionDecision(request_id="x", allow=True))
+    client = _BridgeClient(session, str(tmp_path))  # type: ignore[arg-type]
+    target = tmp_path / "a.txt"
+    target.write_text("l1\nl2\nl3\nl4\n")
+
+    resp = await client.read_text_file(str(target), "sess", line=2, limit=2)
+    assert resp.content == "l2\nl3\n"
+    # A non-positive line number must not slice from the end.
+    resp = await client.read_text_file(str(target), "sess", line=0, limit=1)
+    assert resp.content == "l1\n"
+
+
+@pytest.mark.asyncio
 async def test_session_update_captures_cost():
     session = _FakeSession(PermissionDecision(request_id="x", allow=True))
     client = _BridgeClient(session)  # type: ignore[arg-type]
