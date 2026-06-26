@@ -2,7 +2,7 @@
 
 # a2claude
 
-Run Claude Code as an [A2A](https://a2aprotocol.ai/) agent server. Other agents call it over the protocol; it drives a real Claude Code session in your project and streams the work back as it happens.
+Serve a coding agent over the [A2A](https://a2aprotocol.ai/) protocol. Other agents call it over A2A; it drives a real coding-agent session in your project — Claude Code, or any agent that speaks Zed's [Agent Client Protocol](https://agentclientprotocol.com) (ACP): Gemini CLI, Codex, OpenHands, and more — and streams the work back as it happens.
 
 [![CI](https://github.com/kanywst/a2claude/actions/workflows/ci.yml/badge.svg)](https://github.com/kanywst/a2claude/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
@@ -11,17 +11,18 @@ Run Claude Code as an [A2A](https://a2aprotocol.ai/) agent server. Other agents 
 
 ![a2claude streaming a task, then pausing on a permission prompt](assets/demo.gif)
 
-Most adapters that put a coding agent behind A2A flatten everything to text in, text out. a2claude keeps the structure Claude Code produces: the tools it runs, the files it changes, what it costs, and how to continue on the next turn.
+Most adapters that put a coding agent behind A2A flatten everything to text in, text out. a2claude keeps the structure the agent produces: the tools it runs, the files it changes, what it costs, the approvals it needs, and how to continue on the next turn. It bridges two Linux Foundation interop standards — **ACP** (how editors and clients talk to coding agents) on the agent side, **A2A** (how agents delegate to each other) on the caller side — so any ACP agent becomes a peer any A2A orchestrator can call.
 
 ## How it maps to A2A
 
-| Claude Code produces     | A2A surface it lands on                            |
-| ------------------------ | -------------------------------------------------- |
-| Assistant text           | A streamed artifact (`append` / `last_chunk`)      |
-| A tool call (Bash, Edit) | A `working` status update for the action           |
-| A file edit              | A named artifact carrying the diff                 |
+| The coding agent produces | A2A surface it lands on                            |
+| ------------------------- | -------------------------------------------------- |
+| Assistant text            | A streamed artifact (`append` / `last_chunk`)      |
+| A tool call (Bash, Edit)  | A `working` status update for the action           |
+| A file edit (diff)        | A named artifact carrying the diff                 |
+| A permission request      | An `input-required` pause the caller answers       |
 | Run result               | Cost, turns, and usage on the completion message   |
-| Session id               | Mapped to the A2A `contextId` so follow-ups resume |
+| Session id                | Mapped to the A2A `contextId` so follow-ups resume |
 
 The mapping is all in `executor.py`. Backends only emit normalized events; they never touch the protocol.
 
@@ -29,19 +30,19 @@ The mapping is all in `executor.py`. Backends only emit normalized events; they 
 
 Anthropic now ships its own ways to run Claude Code beyond the terminal: Claude Code on the web, background agents, cloud-hosted Routines, and the Managed Agents API. These are the right choices when you want Anthropic to host the run and you live in their ecosystem, and they are typically tied to Anthropic infrastructure and a GitHub-centric flow.
 
-a2claude solves a different problem: making Claude Code a first-class peer on a vendor-neutral [A2A](https://a2aprotocol.ai/) mesh. An orchestrator built on any framework discovers it through its agent card and delegates coding work to it the same way it would to any other A2A agent. The run happens on infrastructure you control, in a workspace you point it at. Reach for a2claude when:
+a2claude solves a different problem: making any coding agent a first-class peer on a vendor-neutral [A2A](https://a2aprotocol.ai/) mesh. An orchestrator built on any framework discovers it through its agent card and delegates coding work the same way it would to any other A2A agent. The run happens on infrastructure you control, in a workspace you point it at. Reach for a2claude when:
 
 - another agent (not a human at a prompt) is the caller, and it speaks A2A;
 - you want the run on your own infrastructure and data boundary, not a vendor VM;
-- you are wiring Claude Code into a multi-vendor agent system rather than standardizing on one vendor's hosted stack.
+- you do not want to bet on one vendor's coding agent: ACP makes the backend a launch-command choice, so swapping Claude Code for Codex, Gemini CLI, or OpenHands does not touch the protocol surface your callers depend on.
 
-The practical user is the platform team building that mesh, not the individual developer; the developer reaches it through whatever orchestrator the team puts in front of them.
+ACP already standardizes the editor↔agent side and a dozen agents speak it; a2claude is the piece that exposes an ACP agent to *remote autonomous callers* over A2A, with permission round-trips and cost preserved as first-class protocol citizens — the part ACP leaves out because it assumes a human in an editor. The practical user is the platform team building that mesh, not the individual developer.
 
 ## Requirements
 
 - Python 3.13+
 - [uv](https://docs.astral.sh/uv/)
-- Claude Code CLI on `PATH` (only for the `claude` backend)
+- An ACP agent adapter for the `acp` backend, launched as a subprocess. The `claude` preset uses `npx @zed-industries/claude-agent-acp` (needs Node and a Claude credential); `gemini` uses the Gemini CLI; or point `--agent-command` at any ACP agent.
 
 ## Quick start
 
@@ -68,11 +69,18 @@ fix the failing test
 [completed] $0.0 · 1 turns
 ```
 
-Then point it at a real project:
+Then point it at a real project. The default backend is `acp`, fronting Claude Code through its ACP adapter:
 
 ```bash
-uv run a2claude serve --backend claude --cwd /path/to/project
+uv run a2claude serve --cwd /path/to/project          # acp + claude by default
 uv run a2claude call "add a /health endpoint" --url http://localhost:9100/
+```
+
+Swap the agent without touching anything else:
+
+```bash
+uv run a2claude serve --agent gemini --cwd /path/to/project
+uv run a2claude serve --agent-command "npx -y some-other-acp-agent"
 ```
 
 Continue the same conversation by passing the `context` from a previous turn:
@@ -93,16 +101,17 @@ The agent card is served at `/.well-known/agent-card.json` and advertises Claude
 
 ## Backends
 
-A backend turns a prompt into a stream of normalized events. Two ship today:
+A backend turns a prompt into a stream of normalized events. Three ship today:
 
+- `acp` (default): drives any agent that speaks Zed's Agent Client Protocol as a subprocess. `--agent claude|gemini|codex` selects a launch preset; `--agent-command` drives any other ACP agent. This is the vendor-neutral path.
+- `claude`: drives Claude Code directly through the Claude Agent SDK, no subprocess. Install with `uv sync --extra claude`. Use it when you want the SDK-native path (e.g. `--max-budget-usd`) rather than ACP.
 - `echo`: no dependencies, mirrors the input. For wiring checks and tests.
-- `claude`: drives Claude Code through the Claude Agent SDK.
 
-The split keeps the A2A layer independent of how Claude Code is invoked, so a raw-CLI backend can be added later without touching the server or the protocol mapping.
+The split keeps the A2A layer independent of how the agent is invoked: backends emit normalized events and never import `a2a.*`; the executor maps those events onto the protocol and never imports an agent SDK. Adding a backend never touches the server or the protocol mapping.
 
 ## Authentication
 
-The `claude` backend uses whatever the Claude CLI is configured with. When the server answers on behalf of other agents, that has to be an Anthropic API key (or Bedrock / Vertex). Anthropic does not permit subscription credentials for third-party serving. Set a per-run cost ceiling with `--max-budget-usd`.
+Each agent authenticates the way its own tooling does, inherited from the server's environment: the `acp` backend passes the environment through to the adapter subprocess (e.g. `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`), and the `claude` backend uses whatever the Claude CLI is configured with. When the server answers on behalf of other agents, a Claude credential has to be an Anthropic API key (or Bedrock / Vertex); Anthropic does not permit subscription credentials for third-party serving. The `claude` backend can cap per-run cost with `--max-budget-usd`.
 
 ## Signed agent cards
 
@@ -137,9 +146,9 @@ uv run a2claude call "sudo reboot"
 uv run a2claude call "allow" --task <id> --context <id>
 ```
 
-`allow` (or `yes`, `approve`, `ok`) approves; anything else denies. The Claude session stays alive across the pause, so it resumes exactly where it stopped.
+`allow` (or `yes`, `approve`, `ok`) approves; anything else denies. The agent session stays alive across the pause, so it resumes exactly where it stopped. Over ACP this is the agent's `session/request_permission` call answered from the A2A caller's reply; with the `claude` backend it routes through the Claude SDK's `can_use_tool`.
 
-The server does not inherit your personal Claude settings, so it has no pre-approved tool allowlist; every tool that needs approval routes through the caller. Read-only actions Claude already treats as safe still run without a prompt.
+Whatever the agent decides needs approval becomes an `input-required` pause rather than being silently skipped or auto-approved; the caller, not the server, holds the decision. Read-only actions the agent already treats as safe still run without a prompt.
 
 ## Long-running tasks
 
