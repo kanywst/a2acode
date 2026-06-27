@@ -1,8 +1,9 @@
 """Agent card construction.
 
-The card advertises Claude Code's coding abilities as discrete A2A skills so
-that calling agents can route to it deliberately rather than treating it as an
-opaque chat box.
+The card advertises the coding agent's abilities as discrete A2A skills so that
+calling agents can route to it deliberately rather than treating it as an opaque
+chat box. The name identifies which agent is fronted; the skills are the same
+generation/refactor/debug/review/test/explain set regardless of backend.
 """
 
 from __future__ import annotations
@@ -93,7 +94,7 @@ def build_card(
     card = AgentCard(
         name=name,
         description=description
-        or "Claude Code as an A2A agent: generation, refactoring, "
+        or "A coding agent on an A2A mesh: generation, refactoring, "
         "debugging, review, testing, and explanation over a real project "
         "workspace.",
         version=VERSION,
