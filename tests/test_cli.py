@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
-from a2claude.cli import app
+from a2acode.cli import app
 
 runner = CliRunner()
 
@@ -25,7 +25,7 @@ def _plain(output: str) -> str:
     return re.sub(r"[^a-zA-Z0-9-]", "", no_ansi)
 
 
-@patch("a2claude.cli.uvicorn.run")
+@patch("a2acode.cli.uvicorn.run")
 def test_serve_rejects_invalid_permission_mode(mock_run: MagicMock) -> None:
     # --permission-mode is a Claude-only flag, so it is validated on the claude
     # path. A bad value fails before uvicorn.run, so the server never starts.
@@ -39,7 +39,7 @@ def test_serve_rejects_invalid_permission_mode(mock_run: MagicMock) -> None:
     assert "bogus" in plain
 
 
-@patch("a2claude.cli.uvicorn.run")
+@patch("a2acode.cli.uvicorn.run")
 def test_serve_accepts_a_valid_permission_mode(mock_run: MagicMock) -> None:
     # 'plan' is valid, so validation passes and execution proceeds to uvicorn.run
     # (mocked here so no socket is bound).
@@ -50,7 +50,7 @@ def test_serve_accepts_a_valid_permission_mode(mock_run: MagicMock) -> None:
     mock_run.assert_called_once()
 
 
-@patch("a2claude.cli.uvicorn.run")
+@patch("a2acode.cli.uvicorn.run")
 def test_serve_ignores_permission_mode_off_the_claude_path(
     mock_run: MagicMock,
 ) -> None:
@@ -63,7 +63,7 @@ def test_serve_ignores_permission_mode_off_the_claude_path(
     mock_run.assert_called_once()
 
 
-@patch("a2claude.cli.uvicorn.run")
+@patch("a2acode.cli.uvicorn.run")
 def test_serve_rejects_malformed_agent_command(mock_run: MagicMock) -> None:
     # An unmatched quote makes shlex.split raise; it must surface as a clean
     # BadParameter, not a traceback, and the server must not start.

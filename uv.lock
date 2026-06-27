@@ -39,7 +39,7 @@ telemetry = [
 ]
 
 [[package]]
-name = "a2claude"
+name = "a2acode"
 version = "0.3.0"
 source = { editable = "." }
 dependencies = [

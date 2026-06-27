@@ -128,11 +128,11 @@ class ClaudeCodeExecutor(AgentExecutor):
         # span() drops None-valued attributes, so no fallbacks are needed; the
         # ids are populated by the SDK before execute is called.
         with span(
-            "a2claude.execute",
+            "a2acode.execute",
             **{
                 "a2a.task_id": context.task_id,
                 "a2a.context_id": context.context_id,
-                "a2claude.backend": self._backend.name,
+                "a2acode.backend": self._backend.name,
             },
         ):
             await self._execute(context, event_queue)
@@ -293,7 +293,7 @@ class ClaudeCodeExecutor(AgentExecutor):
             message=updater.new_agent_message(
                 [Part(text=f"Permission requested for {event.tool_name}: {line}")],
                 metadata={
-                    "a2claude_permission": {
+                    "a2acode_permission": {
                         "request_id": event.request_id,
                         "tool": event.tool_name,
                         "input": event.tool_input,

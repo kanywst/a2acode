@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from a2claude import executor as executor_mod
-from a2claude.backends import BackendSession, RunRequest, make_backend
-from a2claude.executor import ClaudeCodeExecutor
+from a2acode import executor as executor_mod
+from a2acode.backends import BackendSession, RunRequest, make_backend
+from a2acode.executor import ClaudeCodeExecutor
 
 
 def test_remember_session_moves_reused_context_to_most_recent():

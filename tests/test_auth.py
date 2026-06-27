@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from starlette.testclient import TestClient
 
-from a2claude.backends import make_backend
-from a2claude.card import build_card
-from a2claude.server import build_app
+from a2acode.backends import make_backend
+from a2acode.card import build_card
+from a2acode.server import build_app
 
 TOKEN = "s3cret-bearer-token"
 
@@ -74,7 +74,7 @@ def test_no_auth_by_default():
 def test_middleware_rejects_empty_token():
     import pytest
 
-    from a2claude.auth import BearerAuthMiddleware
+    from a2acode.auth import BearerAuthMiddleware
 
     with pytest.raises(ValueError, match="empty"):
         BearerAuthMiddleware(lambda *a: None, token="   ")

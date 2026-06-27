@@ -29,7 +29,7 @@ BEARER_SCHEME = "bearer"
 try:
     # The agent card version tracks the package version, read from installed
     # metadata so there is one source of truth (pyproject) and it cannot drift.
-    VERSION = _package_version("a2claude")
+    VERSION = _package_version("a2acode")
 except PackageNotFoundError:  # running from a source tree without an install
     VERSION = "0.0.0"
 

@@ -1,17 +1,17 @@
-<img src="assets/mascot.png" alt="a2claude" width="150" align="right">
+<img src="assets/mascot.png" alt="a2acode" width="150" align="right">
 
-# a2claude
+# a2acode
 
 Serve a coding agent over the [A2A](https://a2aprotocol.ai/) protocol. Other agents call it over A2A; it drives a real coding-agent session in your project — Claude Code, or any agent that speaks Zed's [Agent Client Protocol](https://agentclientprotocol.com) (ACP): Gemini CLI, Codex, OpenHands, and more — and streams the work back as it happens.
 
-[![CI](https://github.com/kanywst/a2claude/actions/workflows/ci.yml/badge.svg)](https://github.com/kanywst/a2claude/actions/workflows/ci.yml)
+[![CI](https://github.com/kanywst/a2acode/actions/workflows/ci.yml/badge.svg)](https://github.com/kanywst/a2acode/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/)
 [![Protocol: A2A 1.0](https://img.shields.io/badge/protocol-A2A%201.0-D97757.svg)](https://a2aprotocol.ai/)
 
-![a2claude streaming a task, then pausing on a permission prompt](assets/demo.gif)
+![a2acode streaming a task, then pausing on a permission prompt](assets/demo.gif)
 
-Most adapters that put a coding agent behind A2A flatten everything to text in, text out. a2claude keeps the structure the agent produces: the tools it runs, the files it changes, what it costs, the approvals it needs, and how to continue on the next turn. It bridges two Linux Foundation interop standards — **ACP** (how editors and clients talk to coding agents) on the agent side, **A2A** (how agents delegate to each other) on the caller side — so any ACP agent becomes a peer any A2A orchestrator can call.
+Most adapters that put a coding agent behind A2A flatten everything to text in, text out. a2acode keeps the structure the agent produces: the tools it runs, the files it changes, what it costs, the approvals it needs, and how to continue on the next turn. It bridges two Linux Foundation interop standards — **ACP** (how editors and clients talk to coding agents) on the agent side, **A2A** (how agents delegate to each other) on the caller side — so any ACP agent becomes a peer any A2A orchestrator can call.
 
 ## How it maps to A2A
 
@@ -30,13 +30,13 @@ The mapping is all in `executor.py`. Backends only emit normalized events; they 
 
 Anthropic now ships its own ways to run Claude Code beyond the terminal: Claude Code on the web, background agents, cloud-hosted Routines, and the Managed Agents API. These are the right choices when you want Anthropic to host the run and you live in their ecosystem, and they are typically tied to Anthropic infrastructure and a GitHub-centric flow.
 
-a2claude solves a different problem: making any coding agent a first-class peer on a vendor-neutral [A2A](https://a2aprotocol.ai/) mesh. An orchestrator built on any framework discovers it through its agent card and delegates coding work the same way it would to any other A2A agent. The run happens on infrastructure you control, in a workspace you point it at. Reach for a2claude when:
+a2acode solves a different problem: making any coding agent a first-class peer on a vendor-neutral [A2A](https://a2aprotocol.ai/) mesh. An orchestrator built on any framework discovers it through its agent card and delegates coding work the same way it would to any other A2A agent. The run happens on infrastructure you control, in a workspace you point it at. Reach for a2acode when:
 
 - another agent (not a human at a prompt) is the caller, and it speaks A2A;
 - you want the run on your own infrastructure and data boundary, not a vendor VM;
 - you do not want to bet on one vendor's coding agent: ACP makes the backend a launch-command choice, so swapping Claude Code for Codex, Gemini CLI, or OpenHands does not touch the protocol surface your callers depend on.
 
-ACP already standardizes the editor↔agent side and a dozen agents speak it; a2claude is the piece that exposes an ACP agent to *remote autonomous callers* over A2A, with permission round-trips and cost preserved as first-class protocol citizens — the part ACP leaves out because it assumes a human in an editor. The practical user is the platform team building that mesh, not the individual developer.
+ACP already standardizes the editor↔agent side and a dozen agents speak it; a2acode is the piece that exposes an ACP agent to *remote autonomous callers* over A2A, with permission round-trips and cost preserved as first-class protocol citizens — the part ACP leaves out because it assumes a human in an editor. The practical user is the platform team building that mesh, not the individual developer.
 
 ## Requirements
 
@@ -55,9 +55,9 @@ uv sync
 The `echo` backend needs no API key and no Claude install, so you can exercise the whole path offline first:
 
 ```bash
-uv run a2claude serve --backend echo &
+uv run a2acode serve --backend echo &
 # once the "Uvicorn running" line appears:
-uv run a2claude call "fix the failing test"
+uv run a2acode call "fix the failing test"
 ```
 
 ```text
@@ -72,30 +72,30 @@ fix the failing test
 Then point it at a real project. The default backend is `acp`, fronting Claude Code through its ACP adapter:
 
 ```bash
-uv run a2claude serve --cwd /path/to/project          # acp + claude by default
-uv run a2claude call "add a /health endpoint" --url http://localhost:9100/
+uv run a2acode serve --cwd /path/to/project          # acp + claude by default
+uv run a2acode call "add a /health endpoint" --url http://localhost:9100/
 ```
 
 Swap the agent without touching anything else:
 
 ```bash
-uv run a2claude serve --agent gemini --cwd /path/to/project
-uv run a2claude serve --agent-command "npx -y some-other-acp-agent"
+uv run a2acode serve --agent gemini --cwd /path/to/project
+uv run a2acode serve --agent-command "npx -y some-other-acp-agent"
 ```
 
 Continue the same conversation by passing the `context` from a previous turn:
 
 ```bash
-uv run a2claude call "now add a test for it" --context <context-id>
+uv run a2acode call "now add a test for it" --context <context-id>
 ```
 
 ## Commands
 
 | Command              | Description                                  |
 | -------------------- | -------------------------------------------- |
-| `a2claude serve`     | Start the A2A server                         |
-| `a2claude call TEXT` | Send a message and print the streamed events |
-| `a2claude card`      | Fetch and print the agent card               |
+| `a2acode serve`     | Start the A2A server                         |
+| `a2acode call TEXT` | Send a message and print the streamed events |
+| `a2acode card`      | Fetch and print the agent card               |
 
 The agent card is served at `/.well-known/agent-card.json` and advertises Claude Code's abilities as discrete skills (generation, refactor, debug, review, test, explain).
 
@@ -118,7 +118,7 @@ Each agent authenticates the way its own tooling does, inherited from the server
 A caller that discovers this server only has the agent card to go on. Sign it so the caller can confirm the card came from you and was not swapped in transit:
 
 ```bash
-uv run a2claude serve --sign-key card-signing.pem --sign-kid my-key-1 --sign-alg ES256
+uv run a2acode serve --sign-key card-signing.pem --sign-kid my-key-1 --sign-alg ES256
 ```
 
 The card is then served with a JWS signature over its canonical form. `--sign-key` is a path to a file holding the key: a PEM private key for asymmetric algorithms (`ES256`, `RS256`), or a shared secret for `HS256`. `--sign-kid` is the key id a verifier uses to look up the matching public key. Unsigned is still the default.
@@ -128,7 +128,7 @@ The card is then served with a JWS signature over its canonical form. `--sign-ke
 A signed card proves who the server is; this proves the caller is allowed in. Require a bearer token and the server rejects any task request that does not carry it:
 
 ```bash
-uv run a2claude serve --auth-token-file caller-token.txt
+uv run a2acode serve --auth-token-file caller-token.txt
 ```
 
 When `--auth-token-file` is set, callers must send `Authorization: Bearer <token>`; a request without a valid token gets `401 Unauthorized`. The agent card stays public so a caller can still fetch it to discover the requirement, and the card advertises the bearer scheme in `securitySchemes`. Without the flag the server stays open, as before.
@@ -140,10 +140,10 @@ A2A keeps the credential at the HTTP layer, so this composes with whatever your 
 A tool that needs approval pauses the task in the A2A `input-required` state instead of being skipped. The caller answers with a follow-up message on the same task:
 
 ```bash
-uv run a2claude call "sudo reboot"
+uv run a2acode call "sudo reboot"
 # ... [input-required] Permission requested for Bash: $ sudo reboot
-#       reply: a2claude call "allow" --task <id> --context <id>
-uv run a2claude call "allow" --task <id> --context <id>
+#       reply: a2acode call "allow" --task <id> --context <id>
+uv run a2acode call "allow" --task <id> --context <id>
 ```
 
 `allow` (or `yes`, `approve`, `ok`) approves; anything else denies. The agent session stays alive across the pause, so it resumes exactly where it stopped. Over ACP this is the agent's `session/request_permission` call answered from the A2A caller's reply; with the `claude` backend it routes through the Claude SDK's `can_use_tool`.
@@ -156,7 +156,7 @@ The agent card advertises push notifications. A caller can register a webhook fo
 
 ## Observability
 
-Debugging one agent is hard; debugging a chain of them without traces is worse. Because A2A runs over HTTP, it drops straight into OpenTelemetry: install the extra and the A2A SDK's instrumentation plus a per-task `a2claude.execute` span light up, with W3C trace context propagating across the call so client and server spans share one trace.
+Debugging one agent is hard; debugging a chain of them without traces is worse. Because A2A runs over HTTP, it drops straight into OpenTelemetry: install the extra and the A2A SDK's instrumentation plus a per-task `a2acode.execute` span light up, with W3C trace context propagating across the call so client and server spans share one trace.
 
 ```bash
 uv sync --extra telemetry

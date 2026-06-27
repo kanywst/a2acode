@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-a2claude serves a coding agent over the [A2A](https://a2aprotocol.ai/) protocol. Other agents discover it through its agent card and delegate coding work; it drives a real coding-agent session and streams the structured work (tool calls, file diffs, permission requests, cost, session continuity) back — not just flattened text in / text out.
+a2acode serves a coding agent over the [A2A](https://a2aprotocol.ai/) protocol. Other agents discover it through its agent card and delegate coding work; it drives a real coding-agent session and streams the structured work (tool calls, file diffs, permission requests, cost, session continuity) back — not just flattened text in / text out.
 
 It is a **bridge between two interop standards**: it speaks Zed's [Agent Client Protocol](https://agentclientprotocol.com) (ACP) to the coding agent (Claude Code, Gemini CLI, Codex, OpenHands, ... — a launch-command choice) and A2A to the caller. The default `acp` backend makes the agent vendor-neutral; a `claude` backend (Claude Agent SDK, no subprocess) and an `echo` backend also ship.
 
@@ -26,8 +26,8 @@ CI (`.github/workflows/ci.yml`) runs lint, format-check, mypy, pytest, and build
 Run the server end to end without an API key using the `echo` backend:
 
 ```bash
-uv run a2claude serve --backend echo &
-uv run a2claude call "fix the failing test"
+uv run a2acode serve --backend echo &
+uv run a2acode call "fix the failing test"
 ```
 
 ## Architecture
@@ -46,7 +46,7 @@ CLI / A2A caller
         -> echo.py      dependency-free mirror, for tests and offline wiring checks
 ```
 
-The `acp` backend is the headline: ACP's `session/update` stream, diff content, and `session/request_permission` map almost one-to-one onto the event vocabulary below, so vendor-neutrality is a launch-command choice rather than a backend per agent. ACP itself targets human-driven editors; a2claude's value is exposing an ACP agent to *remote A2A callers* with the permission round-trip and cost preserved.
+The `acp` backend is the headline: ACP's `session/update` stream, diff content, and `session/request_permission` map almost one-to-one onto the event vocabulary below, so vendor-neutrality is a launch-command choice rather than a backend per agent. ACP itself targets human-driven editors; a2acode's value is exposing an ACP agent to *remote A2A callers* with the permission round-trip and cost preserved.
 
 ### The event vocabulary (`backends/base.py`)
 
@@ -82,7 +82,7 @@ The server does **not** load the developer's personal Claude settings (`setting_
 - **Keep the layering intact.** If you reach for `acp`/`claude_agent_sdk` outside their own backend module, or for `a2a.*` inside a backend, that's the wrong layer.
 - **The translation functions are pure and side-effect free** — `events_from_message` (claude), `events_from_update` + `select_option` (acp), and `diff.py` — so the protocol mapping is unit-testable without a live agent. Keep them that way; stateful concerns (cost capture, permission parking) live in the backend's `Client`/`drive`, not the translator.
 - Python 3.13+, full type hints, `from __future__ import annotations`. Ruff enforces `E, F, I, UP, B, SIM` at line length 88.
-- The `acp` and `claude` backends are imported lazily (`make_backend`) so `echo` works without their runtime deps. The Claude SDK is an optional extra (`a2claude[claude]`). New optional backends should follow the same lazy pattern.
+- The `acp` and `claude` backends are imported lazily (`make_backend`) so `echo` works without their runtime deps. The Claude SDK is an optional extra (`a2acode[claude]`). New optional backends should follow the same lazy pattern.
 
 ## Reference material
 

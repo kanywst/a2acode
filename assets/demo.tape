@@ -14,20 +14,20 @@ Hide
 Type 'cd "$(git rev-parse --show-toplevel)" && source .venv/bin/activate && export PS1="$ " _ZO_DOCTOR=0 && clear'
 Enter
 Sleep 1.5s
-Type "a2claude serve --backend echo > /tmp/demo.log 2>&1 &"
+Type "a2acode serve --backend echo > /tmp/demo.log 2>&1 &"
 Enter
 Sleep 2.5s
 Type "clear"
 Enter
 Show
 
-Type "a2claude call 'refactor the parser'"
+Type "a2acode call 'refactor the parser'"
 Enter
 Sleep 3.5s
 
 Type "# a tool that needs approval pauses the task:"
 Enter
-Type "a2claude call 'sudo reboot'"
+Type "a2acode call 'sudo reboot'"
 Enter
 Sleep 4s
 Sleep 1.5s

@@ -2,9 +2,9 @@
 
 Three commands, enough to run the server and exercise it by hand:
 
-    a2claude serve        start the A2A server
-    a2claude call TEXT    send a message and print the streamed events
-    a2claude card         fetch and print the agent card
+    a2acode serve        start the A2A server
+    a2acode call TEXT    send a message and print the streamed events
+    a2acode card         fetch and print the agent card
 """
 
 from __future__ import annotations
@@ -174,7 +174,7 @@ def serve(
         auth_token=auth_token,
     )
     label = f"{backend}:{agent}" if backend == "acp" else backend
-    typer.echo(f"a2claude: backend={label} card={_local_url(host, port)}")
+    typer.echo(f"a2acode: backend={label} card={_local_url(host, port)}")
     uvicorn.run(asgi_app, host=host, port=port, log_level="info")
 
 
@@ -270,7 +270,7 @@ async def _call(text: str, url: str, context: str | None, task: str | None) -> N
 def _render_input_required(line: str, ids: dict[str, str], url: str) -> None:
     typer.echo(f"[input-required] {line}")
     follow = (
-        f'a2claude call "allow" --task {ids["task"]} '
+        f'a2acode call "allow" --task {ids["task"]} '
         f"--context {ids['context']} --url {url}"
     )
     typer.echo(f"  reply: {follow}")

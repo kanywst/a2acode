@@ -1,5 +1,5 @@
 [project]
-name = "a2claude"
+name = "a2acode"
 version = "0.3.0"
 description = "Serve Claude Code and other ACP coding agents over the A2A protocol."
 readme = "README.md"
@@ -21,15 +21,15 @@ dependencies = [
 # Claude Code too, so this is only needed for the SDK-native path.
 claude = ["claude-agent-sdk>=0.2.101"]
 # Distributed tracing. Pulls the A2A SDK's OpenTelemetry instrumentation plus
-# the API a2claude's own spans import directly (declared rather than relied on
-# transitively through the SDK). Install with `a2claude[telemetry]`.
+# the API a2acode's own spans import directly (declared rather than relied on
+# transitively through the SDK). Install with `a2acode[telemetry]`.
 telemetry = ["a2a-sdk[telemetry]>=1.1,<2", "opentelemetry-api>=1.33"]
 
 [project.scripts]
-a2claude = "a2claude.cli:app"
+a2acode = "a2acode.cli:app"
 
 [project.urls]
-Repository = "https://github.com/kanywst/a2claude"
+Repository = "https://github.com/kanywst/a2acode"
 
 [dependency-groups]
 dev = [

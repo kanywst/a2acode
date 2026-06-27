@@ -9,8 +9,8 @@ from claude_agent_sdk import (
     ToolUseBlock,
 )
 
-from a2claude.backends.base import FileChange, Result, RunRequest, TextDelta, ToolUse
-from a2claude.backends.claude import ClaudeBackend, events_from_message
+from a2acode.backends.base import FileChange, Result, RunRequest, TextDelta, ToolUse
+from a2acode.backends.claude import ClaudeBackend, events_from_message
 
 
 def test_events_from_assistant_message_with_write():

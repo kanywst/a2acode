@@ -12,8 +12,8 @@ from a2a.utils.signing import (
     create_signature_verifier,
 )
 
-from a2claude.card import build_card, sign_card, signer_from_key_file
-from a2claude.server import build_app
+from a2acode.card import build_card, sign_card, signer_from_key_file
+from a2acode.server import build_app
 
 SECRET = "a-shared-secret-at-least-32-bytes-long!!"
 
@@ -51,7 +51,7 @@ def test_signer_from_key_file(tmp_path):
 def test_build_app_signs_the_served_card(tmp_path):
     from starlette.testclient import TestClient
 
-    from a2claude.backends import make_backend
+    from a2acode.backends import make_backend
 
     key_file = tmp_path / "card.key"
     key_file.write_text(SECRET)

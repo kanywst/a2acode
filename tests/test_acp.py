@@ -11,12 +11,12 @@ import pytest
 from acp import schema as s
 from acp import text_block, tool_diff_content
 
-from a2claude.backends.acp import (
+from a2acode.backends.acp import (
     _BridgeClient,
     events_from_update,
     select_option,
 )
-from a2claude.backends.base import (
+from a2acode.backends.base import (
     FileChange,
     PermissionDecision,
     TextDelta,

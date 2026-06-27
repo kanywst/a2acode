@@ -19,8 +19,8 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 
-from a2claude.backends import make_backend
-from a2claude.executor import ClaudeCodeExecutor
+from a2acode.backends import make_backend
+from a2acode.executor import ClaudeCodeExecutor
 
 
 @pytest.fixture
@@ -59,9 +59,9 @@ async def test_execute_emits_a_span_with_attributes(exporter):
     await executor.execute(context, EventQueue())
 
     spans = exporter.get_finished_spans()
-    execute_spans = [s for s in spans if s.name == "a2claude.execute"]
+    execute_spans = [s for s in spans if s.name == "a2acode.execute"]
     assert len(execute_spans) == 1
     attrs = execute_spans[0].attributes
     assert attrs["a2a.task_id"] == "task-1"
     assert attrs["a2a.context_id"] == "ctx-1"
-    assert attrs["a2claude.backend"] == "echo"
+    assert attrs["a2acode.backend"] == "echo"

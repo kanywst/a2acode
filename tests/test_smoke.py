@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from a2claude.backends import (
+from a2acode.backends import (
     BackendSession,
     PermissionDecision,
     PermissionRequest,
@@ -14,8 +14,8 @@ from a2claude.backends import (
     ToolUse,
     make_backend,
 )
-from a2claude.backends.diff import file_changes
-from a2claude.server import build_app
+from a2acode.backends.diff import file_changes
+from a2acode.server import build_app
 
 
 async def _drive(backend, request):
@@ -143,7 +143,7 @@ def test_build_app_returns_asgi_app():
 def test_card_advertises_jsonrpc_and_rest():
     from a2a.utils.constants import TransportProtocol
 
-    from a2claude.card import build_card
+    from a2acode.card import build_card
 
     card = build_card("http://localhost:9100/")
     bindings = {iface.protocol_binding for iface in card.supported_interfaces}
@@ -154,10 +154,10 @@ def test_card_advertises_jsonrpc_and_rest():
 def test_card_version_tracks_package_version():
     from importlib.metadata import PackageNotFoundError, version
 
-    from a2claude.card import build_card
+    from a2acode.card import build_card
 
     try:
-        expected = version("a2claude")
+        expected = version("a2acode")
     except PackageNotFoundError:  # source tree without an install: same fallback
         expected = "0.0.0"
     assert build_card("http://localhost:9100/").version == expected
