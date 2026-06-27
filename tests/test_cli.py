@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
@@ -26,7 +26,7 @@ def _plain(output: str) -> str:
 
 
 @patch("a2claude.cli.uvicorn.run")
-def test_serve_rejects_invalid_permission_mode(mock_run):
+def test_serve_rejects_invalid_permission_mode(mock_run: MagicMock) -> None:
     # --permission-mode is a Claude-only flag, so it is validated on the claude
     # path. A bad value fails before uvicorn.run, so the server never starts.
     result = runner.invoke(
@@ -40,7 +40,7 @@ def test_serve_rejects_invalid_permission_mode(mock_run):
 
 
 @patch("a2claude.cli.uvicorn.run")
-def test_serve_accepts_a_valid_permission_mode(mock_run):
+def test_serve_accepts_a_valid_permission_mode(mock_run: MagicMock) -> None:
     # 'plan' is valid, so validation passes and execution proceeds to uvicorn.run
     # (mocked here so no socket is bound).
     result = runner.invoke(
@@ -51,7 +51,9 @@ def test_serve_accepts_a_valid_permission_mode(mock_run):
 
 
 @patch("a2claude.cli.uvicorn.run")
-def test_serve_ignores_permission_mode_off_the_claude_path(mock_run):
+def test_serve_ignores_permission_mode_off_the_claude_path(
+    mock_run: MagicMock,
+) -> None:
     # A non-Claude backend never uses --permission-mode, so an otherwise invalid
     # value must not block startup: validation belongs to the claude path only.
     result = runner.invoke(
@@ -62,7 +64,7 @@ def test_serve_ignores_permission_mode_off_the_claude_path(mock_run):
 
 
 @patch("a2claude.cli.uvicorn.run")
-def test_serve_rejects_malformed_agent_command(mock_run):
+def test_serve_rejects_malformed_agent_command(mock_run: MagicMock) -> None:
     # An unmatched quote makes shlex.split raise; it must surface as a clean
     # BadParameter, not a traceback, and the server must not start.
     result = runner.invoke(
