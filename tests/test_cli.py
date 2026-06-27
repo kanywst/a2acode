@@ -27,9 +27,10 @@ def _plain(output: str) -> str:
 
 @patch("a2claude.cli.uvicorn.run")
 def test_serve_rejects_invalid_permission_mode(mock_run):
-    # Validation fails before uvicorn.run, so the server never starts.
+    # --permission-mode is a Claude-only flag, so it is validated on the claude
+    # path. A bad value fails before uvicorn.run, so the server never starts.
     result = runner.invoke(
-        app, ["serve", "--backend", "echo", "--permission-mode", "bogus"]
+        app, ["serve", "--backend", "claude", "--permission-mode", "bogus"]
     )
     assert result.exit_code != 0
     mock_run.assert_not_called()
@@ -43,7 +44,30 @@ def test_serve_accepts_a_valid_permission_mode(mock_run):
     # 'plan' is valid, so validation passes and execution proceeds to uvicorn.run
     # (mocked here so no socket is bound).
     result = runner.invoke(
-        app, ["serve", "--backend", "echo", "--permission-mode", "plan"]
+        app, ["serve", "--backend", "claude", "--permission-mode", "plan"]
     )
     assert result.exit_code == 0
     mock_run.assert_called_once()
+
+
+@patch("a2claude.cli.uvicorn.run")
+def test_serve_ignores_permission_mode_off_the_claude_path(mock_run):
+    # A non-Claude backend never uses --permission-mode, so an otherwise invalid
+    # value must not block startup: validation belongs to the claude path only.
+    result = runner.invoke(
+        app, ["serve", "--backend", "echo", "--permission-mode", "bogus"]
+    )
+    assert result.exit_code == 0
+    mock_run.assert_called_once()
+
+
+@patch("a2claude.cli.uvicorn.run")
+def test_serve_rejects_malformed_agent_command(mock_run):
+    # An unmatched quote makes shlex.split raise; it must surface as a clean
+    # BadParameter, not a traceback, and the server must not start.
+    result = runner.invoke(
+        app, ["serve", "--backend", "acp", "--agent-command", "npx 'unterminated"]
+    )
+    assert result.exit_code != 0
+    mock_run.assert_not_called()
+    assert "agent-command" in _plain(result.output)

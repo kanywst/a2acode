@@ -116,19 +116,27 @@ def serve(
     from .backends import make_backend
     from .server import build_app
 
-    _validate_permission_mode(permission_mode)
-
     kwargs: dict[str, object] = {}
     card_name = None
     if backend == "acp":
         kwargs = {"agent": agent, "cwd": cwd}
         if agent_command:
-            parts = shlex.split(agent_command)
+            try:
+                parts = shlex.split(agent_command)
+            except ValueError as e:
+                raise typer.BadParameter(f"invalid --agent-command: {e}") from e
             if not parts:
                 raise typer.BadParameter("--agent-command is empty or whitespace-only")
             kwargs["command"], kwargs["args"] = parts[0], parts[1:]
-        card_name = _AGENT_CARD_NAMES.get(agent, agent.capitalize())
+            # The identity of an arbitrary command is unknown, so don't advertise
+            # it under a preset name (which would default to "Claude Code").
+            card_name = "Coding Agent"
+        else:
+            card_name = _AGENT_CARD_NAMES.get(agent, agent.capitalize())
     elif backend == "claude":
+        # Claude-only flag: validate it only on the Claude path so an ACP run
+        # isn't rejected for a flag it never uses.
+        _validate_permission_mode(permission_mode)
         kwargs = {
             "cwd": cwd,
             "permission_mode": permission_mode,
