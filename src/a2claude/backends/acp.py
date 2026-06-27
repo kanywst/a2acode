@@ -173,16 +173,30 @@ class _BridgeClient(Client):
     ) -> s.ReadTextFileResponse:
         # We advertise fs.readTextFile, so serve reads from disk. There are no
         # unsaved editor buffers on a server; the file on disk is the truth.
+        target = self._safe_path(path)
+        if limit is not None and limit <= 0:
+            return s.ReadTextFileResponse(content="")
+        # A non-positive line number reads from the top.
+        start = (line - 1) if (line and line > 0) else 0
+
+        def _read() -> str:
+            if line is None and limit is None:
+                return target.read_text(encoding="utf-8")
+            # Stream so a small windowed read doesn't pull a huge file into
+            # memory just to slice a few lines out of it.
+            end = (start + limit) if limit is not None else None
+            out: list[str] = []
+            with target.open(encoding="utf-8") as f:
+                for i, text_line in enumerate(f):
+                    if i >= start:
+                        out.append(text_line)
+                    if end is not None and i >= end - 1:
+                        break
+            return "".join(out)
+
         # Offloaded to a thread so the synchronous read can't stall the event
         # loop the ACP connection runs on.
-        target = self._safe_path(path)
-        text = await asyncio.to_thread(target.read_text, encoding="utf-8")
-        if line is not None or limit is not None:
-            lines = text.splitlines(keepends=True)
-            # A non-positive line/limit would slice from the end; clamp both.
-            start = (line - 1) if (line and line > 0) else 0
-            end = (start + max(0, limit)) if limit is not None else None
-            text = "".join(lines[start:end])
+        text = await asyncio.to_thread(_read)
         return s.ReadTextFileResponse(content=text)
 
     async def write_text_file(
