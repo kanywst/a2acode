@@ -123,7 +123,7 @@ async def test_request_permission_allow_selects_allow_option():
     client = _BridgeClient(session)  # type: ignore[arg-type]
     tool_call = s.ToolCallUpdate(tool_call_id="t1", title="Run ls", kind="execute")
 
-    resp = await client.request_permission(_opts(), "sess", tool_call)
+    resp = await client.request_permission("sess", tool_call, _opts())
 
     assert isinstance(resp.outcome, s.AllowedOutcome)
     assert resp.outcome.option_id == "a"
@@ -136,7 +136,7 @@ async def test_request_permission_deny_selects_reject_option():
     client = _BridgeClient(session)  # type: ignore[arg-type]
     tool_call = s.ToolCallUpdate(tool_call_id="t1", title="rm -rf", kind="execute")
 
-    resp = await client.request_permission(_opts(), "sess", tool_call)
+    resp = await client.request_permission("sess", tool_call, _opts())
 
     assert isinstance(resp.outcome, s.AllowedOutcome)
     assert resp.outcome.option_id == "r"
@@ -149,7 +149,7 @@ async def test_request_permission_cancels_when_no_matching_option():
     allow_only = [s.PermissionOption(option_id="a", name="Allow", kind="allow_once")]
     tool_call = s.ToolCallUpdate(tool_call_id="t1", title="x")
 
-    resp = await client.request_permission(allow_only, "sess", tool_call)
+    resp = await client.request_permission("sess", tool_call, allow_only)
 
     assert isinstance(resp.outcome, s.DeniedOutcome)
 
@@ -160,9 +160,9 @@ async def test_write_and_read_within_workspace(tmp_path):
     client = _BridgeClient(session, str(tmp_path))  # type: ignore[arg-type]
     target = tmp_path / "sub" / "a.txt"
 
-    await client.write_text_file("hello\n", str(target), "sess")
+    await client.write_text_file("sess", str(target), "hello\n")
     assert target.read_text() == "hello\n"
-    resp = await client.read_text_file(str(target), "sess")
+    resp = await client.read_text_file("sess", str(target))
     assert resp.content == "hello\n"
 
 
@@ -176,9 +176,9 @@ async def test_read_outside_workspace_is_rejected(tmp_path):
     client = _BridgeClient(session, str(workspace))  # type: ignore[arg-type]
 
     with pytest.raises(PermissionError):
-        await client.read_text_file(str(secret), "sess")
+        await client.read_text_file("sess", str(secret))
     with pytest.raises(PermissionError):
-        await client.write_text_file("x", str(tmp_path / "escape.txt"), "sess")
+        await client.write_text_file("sess", str(tmp_path / "escape.txt"), "x")
 
 
 @pytest.mark.asyncio
@@ -188,13 +188,13 @@ async def test_read_with_line_and_limit(tmp_path):
     target = tmp_path / "a.txt"
     target.write_text("l1\nl2\nl3\nl4\n")
 
-    resp = await client.read_text_file(str(target), "sess", line=2, limit=2)
+    resp = await client.read_text_file("sess", str(target), line=2, limit=2)
     assert resp.content == "l2\nl3\n"
     # A non-positive line number must not slice from the end.
-    resp = await client.read_text_file(str(target), "sess", line=0, limit=1)
+    resp = await client.read_text_file("sess", str(target), line=0, limit=1)
     assert resp.content == "l1\n"
     # A negative limit must not slice from the end; it yields nothing.
-    resp = await client.read_text_file(str(target), "sess", line=1, limit=-1)
+    resp = await client.read_text_file("sess", str(target), line=1, limit=-1)
     assert resp.content == ""
 
 
