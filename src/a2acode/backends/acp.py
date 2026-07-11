@@ -142,9 +142,9 @@ class _BridgeClient(Client):
 
     async def request_permission(
         self,
-        options: list[s.PermissionOption],
         session_id: str,
         tool_call: s.ToolCallUpdate,
+        options: list[s.PermissionOption],
         **_: Any,
     ) -> s.RequestPermissionResponse:
         name = tool_call.title or (tool_call.kind or "tool")
@@ -165,10 +165,10 @@ class _BridgeClient(Client):
 
     async def read_text_file(
         self,
-        path: str,
         session_id: str,
-        limit: int | None = None,
+        path: str,
         line: int | None = None,
+        limit: int | None = None,
         **_: Any,
     ) -> s.ReadTextFileResponse:
         # We advertise fs.readTextFile, so serve reads from disk. There are no
@@ -200,8 +200,8 @@ class _BridgeClient(Client):
         return s.ReadTextFileResponse(content=text)
 
     async def write_text_file(
-        self, content: str, path: str, session_id: str, **_: Any
-    ) -> None:
+        self, session_id: str, path: str, content: str, **_: Any
+    ) -> s.WriteTextFileResponse | None:
         target = self._safe_path(path)
 
         def _write() -> None:
