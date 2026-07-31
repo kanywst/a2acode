@@ -13,7 +13,7 @@ become an A2A ``input-required`` round trip rather than being silently skipped.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
@@ -136,12 +136,32 @@ BackendEvent = (
 
 
 @dataclass(slots=True)
+class Attachment:
+    """A non-text part of the caller's message, handed to the agent.
+
+    At most one of ``text``, ``data``, and ``uri`` is set: decoded text for
+    anything textual, raw bytes for anything else, and a bare link when the
+    caller referenced a resource instead of inlining it. ``truncated`` says the
+    content was cut to fit the prompt, so a backend can pass that on rather than
+    presenting a partial file as whole.
+    """
+
+    name: str
+    media_type: str = ""
+    text: str | None = None
+    data: bytes | None = None
+    uri: str | None = None
+    truncated: bool = False
+
+
+@dataclass(slots=True)
 class RunRequest:
     """One turn of work handed to a backend."""
 
     prompt: str
     context_id: str | None = None
     resume: str | None = None
+    attachments: list[Attachment] = field(default_factory=list)
 
 
 @runtime_checkable

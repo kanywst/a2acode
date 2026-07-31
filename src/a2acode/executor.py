@@ -28,8 +28,10 @@ from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.server.tasks import TaskUpdater
 from a2a.types import Part, Task, TaskState, TaskStatus
+from google.protobuf import json_format
 
 from .backends.base import (
+    Attachment,
     Backend,
     FileChange,
     Notice,
@@ -60,6 +62,26 @@ _MAX_LIVE = 256
 # Checklist markers for a plan step's status; anything else renders as open.
 _PLAN_MARKS = {"completed": "x", "in_progress": ">"}
 
+# Caps on what a caller can inline into one turn's prompt, per attachment and
+# across the message. Everything inlined competes with the actual work for the
+# agent's context window.
+_MAX_ATTACHED = 64 * 1024
+_MAX_ATTACHED_TOTAL = 256 * 1024
+
+# Media types that are text despite not being under text/*.
+_TEXTUAL_TYPES = {
+    "application/json",
+    "application/x-ndjson",
+    "application/xml",
+    "application/yaml",
+    "application/x-yaml",
+    "application/javascript",
+    "application/x-sh",
+    "application/sql",
+    "application/x-patch",
+    "application/toml",
+}
+
 
 @dataclass
 class _Stream:
@@ -78,39 +100,101 @@ class _Stream:
     plan_artifact_id: str = ""
 
 
-def _build_prompt(context: RequestContext) -> str:
-    """Assemble the prompt from every part of the incoming message.
+def _is_textual(media_type: str) -> bool:
+    return media_type.startswith("text/") or media_type in _TEXTUAL_TYPES
 
-    Text parts are concatenated; file, URL, and structured-data parts are
-    surfaced to Claude as labelled references so an attachment is not silently
-    dropped on the floor.
+
+def _build_input(context: RequestContext) -> tuple[str, list[Attachment]]:
+    """Split the incoming message into prompt text and attachments.
+
+    Text parts become the prompt. Everything else becomes an attachment the
+    backend hands to the agent, so a caller that sends a log, a patch, or a
+    screenshot gets it read rather than reduced to a note that something was
+    attached.
     """
     message = getattr(context, "message", None)
     parts = getattr(message, "parts", None) if message is not None else None
     if not parts:
-        return context.get_user_input() or ""
+        return context.get_user_input() or "", []
 
     texts: list[str] = []
-    refs: list[str] = []
+    attachments: list[Attachment] = []
+    budget = _MAX_ATTACHED_TOTAL
     for part in parts:
         which = part.WhichOneof("content")
         if which == "text":
             if part.text:
                 texts.append(part.text)
-        elif which == "url":
-            label = part.filename or part.url
-            refs.append(f"[attached {label} ({part.media_type or 'file'}): {part.url}]")
-        elif which == "raw":
-            name = part.filename or "unnamed"
-            kind = part.media_type or "application/octet-stream"
-            refs.append(f"[attached file {name} ({kind}, {len(part.raw)} bytes)]")
+            continue
+        if which == "url":
+            attachments.append(
+                Attachment(
+                    name=part.filename or part.url,
+                    media_type=part.media_type or "",
+                    uri=part.url,
+                )
+            )
+            continue
+        if which == "raw":
+            attachment = _from_raw(part)
         elif which == "data":
-            refs.append(f"[attached data ({part.media_type or 'application/json'})]")
+            attachment = _from_data(part)
+        else:
+            continue
+        budget = _fit(attachment, budget)
+        attachments.append(attachment)
 
-    prompt = "\n".join(texts)
-    if refs:
-        prompt = f"{prompt}\n\n" + "\n".join(refs)
-    return prompt.strip()
+    return "\n".join(texts).strip(), attachments
+
+
+def _from_raw(part: Part) -> Attachment:
+    """An inline file part: decoded when it is text, kept as bytes otherwise."""
+    media_type = part.media_type or "application/octet-stream"
+    text: str | None = None
+    if _is_textual(media_type):
+        try:
+            text = part.raw.decode("utf-8")
+        except UnicodeDecodeError:
+            # Declared as text but is not: treat it as the bytes it actually is
+            # rather than handing the agent replacement characters.
+            text = None
+    return Attachment(
+        name=part.filename or "unnamed",
+        media_type=media_type,
+        text=text,
+        data=None if text is not None else bytes(part.raw),
+    )
+
+
+def _from_data(part: Part) -> Attachment:
+    """A structured-data part, rendered as the JSON the caller meant it to be."""
+    return Attachment(
+        name=part.filename or "data",
+        media_type=part.media_type or "application/json",
+        text=json_format.MessageToJson(part.data),
+    )
+
+
+def _fit(attachment: Attachment, budget: int) -> int:
+    """Trim an attachment to the remaining budget; return what is left.
+
+    Everything inlined lands in the agent's context window, and an A2A caller
+    can attach anything, so the total is bounded. Trimming is recorded on the
+    attachment so the agent is told it is looking at a fragment.
+    """
+    cap = min(budget, _MAX_ATTACHED)
+    if attachment.text is not None:
+        if len(attachment.text) > cap:
+            attachment.text = attachment.text[:cap]
+            attachment.truncated = True
+        return budget - len(attachment.text)
+    if attachment.data is not None:
+        if len(attachment.data) > cap:
+            attachment.data = None
+            attachment.truncated = True
+            return budget
+        return budget - len(attachment.data)
+    return budget
 
 
 def _describe_tool(event: ToolUse) -> str:
@@ -195,10 +279,12 @@ class ClaudeCodeExecutor(AgentExecutor):
                 )
             )
             await updater.start_work()
+            prompt, attachments = _build_input(context)
             request = RunRequest(
-                prompt=_build_prompt(context),
+                prompt=prompt,
                 context_id=context_id,
                 resume=self._session_ids.get(context_id),
+                attachments=attachments,
             )
             async with self._admit_lock:
                 await self._evict_if_full()

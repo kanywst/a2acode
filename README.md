@@ -103,6 +103,10 @@ Continuity needs the agent to support ACP's `session/load`. When it does not, th
 
 The agent card is served at `/.well-known/agent-card.json` and advertises Claude Code's abilities as discrete skills (generation, refactor, debug, review, test, explain).
 
+## Attachments
+
+An A2A message is not only text. A caller can attach the failing log, the patch to review, or a screenshot, and the parts reach the agent as content rather than as a note that something was attached: text files are inlined into the prompt, images go to ACP agents that advertise image support as real image blocks, and URL parts arrive as links the agent can fetch. Inlined content is capped per part and per message, and anything trimmed is marked as truncated so the agent knows it is reading a fragment.
+
 ## Backends
 
 A backend turns a prompt into a stream of normalized events. Three ship today:

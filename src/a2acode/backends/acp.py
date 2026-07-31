@@ -30,15 +30,24 @@ protocol translation is unit-testable without launching an agent subprocess.
 from __future__ import annotations
 
 import asyncio
+import base64
 import os
 from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from acp import PROTOCOL_VERSION, Client, spawn_agent_process, text_block
+from acp import (
+    PROTOCOL_VERSION,
+    Client,
+    image_block,
+    spawn_agent_process,
+    text_block,
+)
 from acp import schema as s
 
+from .attach import append_to_prompt
 from .base import (
+    Attachment,
     BackendEvent,
     FileChange,
     Notice,
@@ -125,6 +134,38 @@ def select_option(options: Sequence[s.PermissionOption], *, allow: bool) -> str 
 
 def _as_dict(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def prompt_blocks(
+    request: RunRequest, capabilities: s.AgentCapabilities | None
+) -> list[Any]:
+    """Build the content blocks for one ``session/prompt``.
+
+    An image is sent as a real image block when the agent advertises that it
+    reads them; anything else is folded into the text, which every ACP agent
+    understands. Pure so the capability negotiation is testable without an
+    agent subprocess.
+    """
+    prompt_caps = getattr(capabilities, "prompt_capabilities", None)
+    takes_images = bool(getattr(prompt_caps, "image", False))
+
+    images: list[Any] = []
+    inlined: list[Attachment] = []
+    for attachment in request.attachments:
+        if (
+            takes_images
+            and attachment.data
+            and attachment.media_type.startswith("image/")
+        ):
+            images.append(
+                image_block(
+                    base64.b64encode(attachment.data).decode("ascii"),
+                    attachment.media_type,
+                )
+            )
+        else:
+            inlined.append(attachment)
+    return [text_block(append_to_prompt(request.prompt, inlined)), *images]
 
 
 def _plan(entries: Sequence[s.PlanEntry]) -> Plan:
@@ -343,7 +384,8 @@ class ACPBackend:
             # whatever tool was mid-flight.
             session.set_canceller(lambda: conn.cancel(session_id=session_id))
             response = await conn.prompt(
-                prompt=[text_block(request.prompt)], session_id=session_id
+                prompt=prompt_blocks(request, init.agent_capabilities),
+                session_id=session_id,
             )
             usage = response.usage.model_dump() if response.usage else None
             await session.emit(

@@ -36,6 +36,7 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
+from .attach import append_to_prompt
 from .base import (
     BackendEvent,
     Plan,
@@ -193,7 +194,7 @@ class ClaudeBackend:
 
         options = self._options(request, can_use_tool)
         async with ClaudeSDKClient(options=options) as client:
-            await client.query(request.prompt)
+            await client.query(append_to_prompt(request.prompt, request.attachments))
             async for message in client.receive_response():
                 for event in events_from_message(message):
                     await session.emit(event)
