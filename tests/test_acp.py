@@ -7,6 +7,7 @@ permission round trip is driven against a fake session.
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import AsyncExitStack
 
 import pytest
@@ -520,6 +521,35 @@ async def test_aclose_empties_the_pool(monkeypatch):
     await backend.aclose()
 
     assert backend._agents == {}
+
+
+@pytest.mark.asyncio
+async def test_a_second_turn_in_one_conversation_says_it_is_waiting(monkeypatch):
+    backend, _ = _pooling_backend(monkeypatch)
+    agent = await backend._acquire("ctx-a")
+    started = asyncio.Event()
+
+    async def _park(self, agent, session, request):
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(ACPBackend, "_run_turn", _park)
+
+    first = BackendSession()
+    first.start(lambda s: backend.drive(s, RunRequest(prompt="a", context_id="ctx-a")))
+    await started.wait()
+
+    second = BackendSession()
+    second.start(lambda s: backend.drive(s, RunRequest(prompt="b", context_id="ctx-a")))
+    # Only the notice: the turn itself is still blocked behind the first one, so
+    # draining to completion would wait forever.
+    first_event = await anext(aiter(second.drain()))
+
+    assert isinstance(first_event, Notice)
+    assert "waiting" in first_event.text
+    assert agent.lock.locked()
+    await first.close()
+    await second.close()
 
 
 @pytest.mark.asyncio

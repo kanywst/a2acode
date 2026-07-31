@@ -435,6 +435,16 @@ class ACPBackend:
 
     async def drive(self, session: BackendSession, request: RunRequest) -> None:
         agent = await self._acquire(request.context_id)
+        if agent.lock.locked():
+            # Say so rather than stalling silently. Turns in one conversation
+            # run one at a time now that they share a process, and the turn
+            # ahead may be parked on a permission this caller has not answered.
+            await session.emit(
+                Notice(
+                    "waiting for the turn already in flight on this conversation "
+                    "to finish before starting this one"
+                )
+            )
         # One turn at a time per agent: the connection carries a single
         # conversation, and a turn parked on a permission still owns it.
         async with agent.lock:
