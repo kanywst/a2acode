@@ -40,10 +40,8 @@ class ToolUse:
 class ToolResult:
     """A tool call reached a terminal state.
 
-    Emitted only once the outcome is known, so a caller that saw the matching
-    ``ToolUse`` learns whether the action actually succeeded. ``name`` is
-    best-effort: an agent may report the outcome without repeating the title, in
-    which case the consumer falls back to the name from the ``ToolUse``.
+    ``name`` is best-effort: an agent may report the outcome without repeating
+    the title, leaving the consumer to fall back on the ``ToolUse``'s name.
     """
 
     tool_use_id: str
@@ -73,9 +71,8 @@ class PlanStep:
 class Plan:
     """The agent's current plan for the turn.
 
-    Every update carries the whole plan: agents report plans by replacement
-    rather than by delta, so a consumer renders the latest one instead of
-    accumulating them.
+    Reported by replacement rather than by delta, so a consumer renders the
+    latest one instead of accumulating them.
     """
 
     steps: list[PlanStep]
@@ -85,10 +82,9 @@ class Plan:
 class Notice:
     """A note about the run itself rather than about the agent's work.
 
-    Emitted when the server cannot do exactly what the caller asked and has to
-    carry on differently — a resume the agent cannot honour, say. The caller
-    learns it from the task stream instead of silently receiving an answer
-    produced under different conditions than it expects.
+    Emitted when the server cannot do exactly what the caller asked and carries
+    on differently — a resume the agent cannot honour, say — so the answer does
+    not arrive under conditions the caller does not know about.
     """
 
     text: str
@@ -139,11 +135,9 @@ BackendEvent = (
 class Attachment:
     """A non-text part of the caller's message, handed to the agent.
 
-    At most one of ``text``, ``data``, and ``uri`` is set: decoded text for
-    anything textual, raw bytes for anything else, and a bare link when the
-    caller referenced a resource instead of inlining it. ``truncated`` says the
-    content was cut to fit the prompt, so a backend can pass that on rather than
-    presenting a partial file as whole.
+    At most one of ``text``, ``data``, and ``uri`` is set. ``truncated`` says
+    the content was cut to fit, so a backend passes that on rather than
+    presenting a fragment as the whole file.
     """
 
     name: str
@@ -179,9 +173,8 @@ class Backend(Protocol):
 class ClosableBackend(Protocol):
     """A backend holding resources that outlive a single run.
 
-    Kept separate from ``Backend`` so the base protocol stays "anything with a
-    name and a drive"; only a backend that pools something — the ACP backend's
-    agent subprocesses — needs to be shut down with the server.
+    Separate from ``Backend`` so the base protocol stays "anything with a name
+    and a drive"; only a backend that pools something implements this.
     """
 
     async def aclose(self) -> None:

@@ -194,9 +194,19 @@ async def test_pump_relays_a_notice_as_a_status_update():
     assert updater.status_lines == ["starting a fresh session"]
 
 
-async def test_pump_skips_an_empty_plan():
+async def test_pump_skips_an_empty_plan_when_none_was_ever_shown():
     updater = await _pump_events(Plan(steps=[]))
     assert updater.artifacts == []
+
+
+async def test_pump_clears_a_plan_the_agent_abandoned():
+    updater = await _pump_events(
+        Plan(steps=[PlanStep(content="step one")]),
+        Plan(steps=[]),
+    )
+    # The second update must replace the checklist, not leave the stale one up.
+    assert [text for _, text in updater.artifacts] == ["- [ ] step one\n", ""]
+    assert len({a for a in updater.artifact_ids if a}) == 1
 
 
 async def test_pump_fails_an_evicted_session():

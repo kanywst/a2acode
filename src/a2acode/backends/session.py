@@ -82,9 +82,8 @@ class BackendSession:
     def set_canceller(self, canceller: Callable[[], Awaitable[None]]) -> None:
         """Register how to ask the agent to stop of its own accord.
 
-        Cancelling the runner tears the agent down wherever it happens to be —
-        possibly mid-edit. A backend that can say "stop" over its own protocol
-        registers it here, and ``close`` tries that first.
+        Cancelling the runner tears the agent down wherever it is, possibly
+        mid-edit; ``close`` tries this first.
         """
         self._canceller = canceller
 
@@ -140,15 +139,22 @@ class BackendSession:
     async def _request_stop(self, runner: asyncio.Task[None]) -> None:
         """Ask the agent to stop, and give the run a bounded chance to finish.
 
-        A protocol-level cancel usually makes the current turn return normally,
-        so the runner ends on its own and no work is left half-applied. An agent
-        that ignores it, or a backend with nothing to call, just falls through to
-        the hard cancel in ``close``.
+        A protocol-level cancel usually makes the turn return normally, so the
+        runner ends on its own with no work half-applied. An agent that ignores
+        it falls through to the hard cancel in ``close``.
         """
         if self._canceller is None:
             return
-        with suppress(Exception):
-            await asyncio.wait_for(self._canceller(), _CANCEL_TIMEOUT)
+        # Its own task, collected with wait(), so no failure mode escapes -
+        # including a CancelledError, which would otherwise read as this
+        # coroutine being cancelled and skip the fallback.
+        stop: asyncio.Task[None] = asyncio.ensure_future(self._canceller())
+        await asyncio.wait([stop], timeout=_CANCEL_TIMEOUT)
+        if stop.done():
+            with suppress(BaseException):
+                stop.result()
+        else:
+            stop.cancel()
         await asyncio.wait([runner], timeout=_CANCEL_TIMEOUT)
 
     async def close(self) -> None:

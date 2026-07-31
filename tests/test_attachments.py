@@ -87,7 +87,7 @@ def test_data_part_is_rendered_as_json():
 
 
 def test_an_oversized_text_attachment_is_truncated_and_says_so(monkeypatch):
-    monkeypatch.setattr("a2acode.executor._MAX_ATTACHED", 10)
+    monkeypatch.setattr("a2acode.executor._MAX_TEXT_ATTACHED", 10)
     _, attachments = _build_input(
         _context(Part(raw=b"y" * 50, media_type="text/plain", filename="big.txt"))
     )
@@ -97,7 +97,7 @@ def test_an_oversized_text_attachment_is_truncated_and_says_so(monkeypatch):
 
 
 def test_the_total_budget_bounds_a_message_of_many_attachments(monkeypatch):
-    monkeypatch.setattr("a2acode.executor._MAX_ATTACHED_TOTAL", 12)
+    monkeypatch.setattr("a2acode.executor._MAX_TEXT_TOTAL", 12)
     _, attachments = _build_input(
         _context(
             Part(raw=b"a" * 10, media_type="text/plain", filename="1.txt"),
@@ -111,13 +111,30 @@ def test_the_total_budget_bounds_a_message_of_many_attachments(monkeypatch):
 
 
 def test_an_oversized_binary_attachment_is_dropped_but_still_announced(monkeypatch):
-    monkeypatch.setattr("a2acode.executor._MAX_ATTACHED", 4)
+    monkeypatch.setattr("a2acode.executor._MAX_BINARY_ATTACHED", 4)
     _, attachments = _build_input(
-        _context(Part(raw=b"\x89PNG\r\n\x1a\n", media_type="image/png"))
+        _context(Part(raw=b"\x89PNG\r\n\x1a\n", media_type="image/png", filename="s"))
     )
 
     assert attachments[0].data is None
     assert attachments[0].truncated
+    # It must not read as an empty file: the caller sent bytes we could not pass.
+    assert (
+        render(attachments[0])
+        == "[attached s (image/png): too large to pass on, content dropped]"
+    )
+
+
+def test_a_screenshot_larger_than_the_text_cap_still_reaches_the_agent():
+    # Binary has its own headroom; a real screenshot dwarfs the text cap and
+    # must still travel as an image block rather than as a dropped-content note.
+    png = b"\x89PNG" + b"\x00" * (200 * 1024)
+    _, attachments = _build_input(
+        _context(Part(raw=png, media_type="image/png", filename="shot.png"))
+    )
+
+    assert attachments[0].data == png
+    assert not attachments[0].truncated
 
 
 def test_render_inlines_text_in_a_fence():

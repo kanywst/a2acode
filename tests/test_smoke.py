@@ -182,14 +182,21 @@ async def test_close_still_cancels_an_agent_that_ignores_the_stop(monkeypatch):
     assert session._runner is not None and session._runner.cancelled()
 
 
-async def test_close_survives_a_canceller_that_fails(monkeypatch):
+@pytest.mark.parametrize(
+    "failure",
+    [RuntimeError("the agent is gone"), asyncio.CancelledError()],
+    ids=["raises", "cancelled"],
+)
+async def test_close_survives_a_canceller_that_fails(monkeypatch, failure):
+    # A canceller raising CancelledError must not be mistaken for close() itself
+    # being cancelled, which would skip the hard cancel and leak the runner.
     monkeypatch.setattr(session_mod, "_CANCEL_TIMEOUT", 0.05)
 
     async def _forever(_session):
         await asyncio.Event().wait()
 
     async def _cancel():
-        raise RuntimeError("the agent is gone")
+        raise failure
 
     session = BackendSession()
     session.start(_forever)

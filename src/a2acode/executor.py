@@ -62,11 +62,13 @@ _MAX_LIVE = 256
 # Checklist markers for a plan step's status; anything else renders as open.
 _PLAN_MARKS = {"completed": "x", "in_progress": ">"}
 
-# Caps on what a caller can inline into one turn's prompt, per attachment and
-# across the message. Everything inlined competes with the actual work for the
-# agent's context window.
-_MAX_ATTACHED = 64 * 1024
-_MAX_ATTACHED_TOTAL = 256 * 1024
+# Caps on what a caller can attach to one turn. Text is inlined into the
+# prompt, so it competes with the work for the context window; binary travels
+# as its own content block and gets the headroom a screenshot needs.
+_MAX_TEXT_ATTACHED = 64 * 1024
+_MAX_TEXT_TOTAL = 256 * 1024
+_MAX_BINARY_ATTACHED = 4 * 1024 * 1024
+_MAX_BINARY_TOTAL = 8 * 1024 * 1024
 
 # Media types that are text despite not being under text/*.
 _TEXTUAL_TYPES = {
@@ -92,11 +94,9 @@ class _Stream:
     pending: str | None = None
     sent_first: bool = False
     metadata: dict[str, object] = field(default_factory=dict)
-    # tool_use_id -> name, so a ToolResult that omits the title can still be
-    # reported against the tool the caller watched start.
+    # tool_use_id -> name, for a ToolResult that omits the title.
     tool_names: dict[str, str] = field(default_factory=dict)
-    # One artifact id for the plan, reused so each update replaces the previous
-    # plan instead of appending another copy of it.
+    # Reused so each plan update replaces the last instead of stacking a copy.
     plan_artifact_id: str = ""
 
 
@@ -107,10 +107,8 @@ def _is_textual(media_type: str) -> bool:
 def _build_input(context: RequestContext) -> tuple[str, list[Attachment]]:
     """Split the incoming message into prompt text and attachments.
 
-    Text parts become the prompt. Everything else becomes an attachment the
-    backend hands to the agent, so a caller that sends a log, a patch, or a
-    screenshot gets it read rather than reduced to a note that something was
-    attached.
+    A caller sending a log, a patch, or a screenshot gets it read, rather than
+    reduced to a note that something was attached.
     """
     message = getattr(context, "message", None)
     parts = getattr(message, "parts", None) if message is not None else None
@@ -119,7 +117,7 @@ def _build_input(context: RequestContext) -> tuple[str, list[Attachment]]:
 
     texts: list[str] = []
     attachments: list[Attachment] = []
-    budget = _MAX_ATTACHED_TOTAL
+    budget = _Budget(text=_MAX_TEXT_TOTAL, binary=_MAX_BINARY_TOTAL)
     for part in parts:
         which = part.WhichOneof("content")
         if which == "text":
@@ -141,7 +139,7 @@ def _build_input(context: RequestContext) -> tuple[str, list[Attachment]]:
             attachment = _from_data(part)
         else:
             continue
-        budget = _fit(attachment, budget)
+        budget.fit(attachment)
         attachments.append(attachment)
 
     return "\n".join(texts).strip(), attachments
@@ -175,26 +173,30 @@ def _from_data(part: Part) -> Attachment:
     )
 
 
-def _fit(attachment: Attachment, budget: int) -> int:
-    """Trim an attachment to the remaining budget; return what is left.
+@dataclass
+class _Budget:
+    """What is left of a message's attachment allowance."""
 
-    Everything inlined lands in the agent's context window, and an A2A caller
-    can attach anything, so the total is bounded. Trimming is recorded on the
-    attachment so the agent is told it is looking at a fragment.
-    """
-    cap = min(budget, _MAX_ATTACHED)
-    if attachment.text is not None:
-        if len(attachment.text) > cap:
-            attachment.text = attachment.text[:cap]
-            attachment.truncated = True
-        return budget - len(attachment.text)
-    if attachment.data is not None:
-        if len(attachment.data) > cap:
-            attachment.data = None
-            attachment.truncated = True
-            return budget
-        return budget - len(attachment.data)
-    return budget
+    text: int
+    binary: int
+
+    def fit(self, attachment: Attachment) -> None:
+        """Trim an attachment to what remains, recording that it was trimmed."""
+        if attachment.text is not None:
+            cap = min(self.text, _MAX_TEXT_ATTACHED)
+            if len(attachment.text) > cap:
+                attachment.text = attachment.text[:cap]
+                attachment.truncated = True
+            self.text -= len(attachment.text)
+        elif attachment.data is not None:
+            cap = min(self.binary, _MAX_BINARY_ATTACHED)
+            if len(attachment.data) > cap:
+                # Bytes cannot be usefully cut in half, so an oversized one is
+                # dropped whole and rendered as a note that it was.
+                attachment.data = None
+                attachment.truncated = True
+            else:
+                self.binary -= len(attachment.data)
 
 
 def _describe_tool(event: ToolUse) -> str:
@@ -211,9 +213,8 @@ def _describe_tool(event: ToolUse) -> str:
 def _describe_result(event: ToolResult, name: str) -> str:
     """A short line for a tool's outcome.
 
-    Successful output is left out: the caller already saw the action announced,
-    and a passing tool's stdout is noise on a status update. A failure carries
-    its first line, which is the part that explains what went wrong.
+    Successful output is left out as noise; a failure carries its first line,
+    which is the part that explains it.
     """
     if not event.failed:
         return f"✓ {name}"
@@ -224,15 +225,15 @@ def _describe_result(event: ToolResult, name: str) -> str:
 def _render_plan(plan: Plan) -> str:
     """Render a plan as a markdown checklist.
 
-    ``in_progress`` gets its own marker rather than collapsing into "not done":
-    which step the agent is on is the whole reason a caller watches the plan.
+    ``in_progress`` gets its own marker: which step the agent is on is the
+    reason to watch a plan at all.
     """
     lines = []
     for step in plan.steps:
         mark = _PLAN_MARKS.get(step.status, " ")
         prefix = "(high) " if step.priority == "high" else ""
         lines.append(f"- [{mark}] {prefix}{step.content}")
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines) + "\n" if lines else ""
 
 
 class ClaudeCodeExecutor(AgentExecutor):
@@ -362,7 +363,9 @@ class ClaudeCodeExecutor(AgentExecutor):
                         message=updater.new_agent_message([Part(text=event.text)]),
                     )
                 elif isinstance(event, Plan):
-                    if event.steps:
+                    # An emptied plan still replaces the artifact, or the caller
+                    # would keep seeing a checklist the agent has abandoned.
+                    if event.steps or stream.plan_artifact_id:
                         if not stream.plan_artifact_id:
                             stream.plan_artifact_id = uuid4().hex
                         await updater.add_artifact(

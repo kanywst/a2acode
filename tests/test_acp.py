@@ -8,7 +8,7 @@ permission round trip is driven against a fake session.
 from __future__ import annotations
 
 import asyncio
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, suppress
 
 import pytest
 from acp import (
@@ -484,16 +484,23 @@ async def test_a_turn_without_a_context_is_not_pooled(monkeypatch):
     assert backend._agents == {}
 
 
+async def _turn(backend, context_id) -> _Agent:
+    """Acquire an agent and release it, as a completed turn would."""
+    agent = await backend._acquire(context_id)
+    agent.claims -= 1
+    return agent
+
+
 @pytest.mark.asyncio
 async def test_the_pool_evicts_the_least_recently_used_idle_agent(monkeypatch):
     monkeypatch.setattr(acp_mod, "_MAX_AGENTS", 2)
     backend, _ = _pooling_backend(monkeypatch)
 
-    await backend._acquire("ctx-a")
-    await backend._acquire("ctx-b")
+    await _turn(backend, "ctx-a")
+    await _turn(backend, "ctx-b")
     # Touch "a" so "b" becomes least recently used, then overflow.
-    await backend._acquire("ctx-a")
-    await backend._acquire("ctx-c")
+    await _turn(backend, "ctx-a")
+    await _turn(backend, "ctx-c")
 
     assert set(backend._agents) == {"ctx-a", "ctx-c"}
     await backend.aclose()
@@ -507,8 +514,44 @@ async def test_a_busy_agent_is_never_evicted(monkeypatch):
     busy = await backend._acquire("ctx-a")
     async with busy.lock:
         # Rather than kill a running turn's agent, the pool overshoots.
-        await backend._acquire("ctx-b")
+        await _turn(backend, "ctx-b")
         assert set(backend._agents) == {"ctx-a", "ctx-b"}
+    await backend.aclose()
+
+
+@pytest.mark.asyncio
+async def test_an_agent_handed_out_is_not_evicted_before_its_turn_starts(monkeypatch):
+    # _acquire drops the pool lock before drive takes the agent's own lock. In
+    # that gap the agent is idle but spoken for, and evicting it would close the
+    # connection the turn is about to prompt on.
+    monkeypatch.setattr(acp_mod, "_MAX_AGENTS", 1)
+    backend, _ = _pooling_backend(monkeypatch)
+
+    claimed = await backend._acquire("ctx-a")
+    assert not claimed.lock.locked()
+
+    await backend._acquire("ctx-b")
+
+    assert set(backend._agents) == {"ctx-a", "ctx-b"}
+    await backend.aclose()
+
+
+@pytest.mark.asyncio
+async def test_an_agent_becomes_evictable_once_its_turn_releases_it(monkeypatch):
+    monkeypatch.setattr(acp_mod, "_MAX_AGENTS", 1)
+    backend, _ = _pooling_backend(monkeypatch)
+
+    async def _noop(self, agent, session, request):
+        return
+
+    monkeypatch.setattr(ACPBackend, "_run_turn", _noop)
+    session = BackendSession()
+    await backend.drive(session, RunRequest(prompt="a", context_id="ctx-a"))
+    await session.close()
+
+    await _turn(backend, "ctx-b")
+
+    assert set(backend._agents) == {"ctx-b"}
     await backend.aclose()
 
 
@@ -550,6 +593,38 @@ async def test_a_second_turn_in_one_conversation_says_it_is_waiting(monkeypatch)
     assert agent.lock.locked()
     await first.close()
     await second.close()
+
+
+@pytest.mark.asyncio
+async def test_a_turn_cancelled_while_queued_releases_its_claim(monkeypatch):
+    backend, _ = _pooling_backend(monkeypatch)
+    agent = await backend._acquire("ctx-a")
+    agent.claims -= 1
+    started = asyncio.Event()
+
+    async def _park(self, agent, session, request):
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(ACPBackend, "_run_turn", _park)
+
+    first = BackendSession()
+    first.start(lambda s: backend.drive(s, RunRequest(prompt="a", context_id="ctx-a")))
+    await started.wait()
+
+    queued = asyncio.ensure_future(
+        backend.drive(BackendSession(), RunRequest(prompt="b", context_id="ctx-a"))
+    )
+    await asyncio.sleep(0)
+    assert agent.claims == 2
+    queued.cancel()
+    with suppress(asyncio.CancelledError):
+        await queued
+
+    # Only the running turn still holds it; a claim stuck at 2 would pin the
+    # agent in the pool forever.
+    assert agent.claims == 1
+    await first.close()
 
 
 @pytest.mark.asyncio
