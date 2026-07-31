@@ -9,6 +9,8 @@ from a2acode.backends import (
     Plan,
     PlanStep,
     RunRequest,
+    TextDelta,
+    Thought,
     ToolResult,
     ToolUse,
     make_backend,
@@ -187,6 +189,30 @@ async def test_pump_replaces_the_plan_artifact_on_every_update():
     assert updater.artifacts[1][1] == "- [x] step one\n- [ ] (high) step two\n"
     # One artifact id across updates, so the caller replaces rather than stacks.
     assert len({a for a in updater.artifact_ids if a}) == 1
+
+
+async def test_pump_streams_thinking_into_its_own_artifact():
+    updater = await _pump_events(
+        Thought(text="first "),
+        Thought(text="second"),
+        TextDelta(text="the answer"),
+    )
+    thinking = [(name, text) for name, text in updater.artifacts if name == "thinking"]
+
+    assert thinking == [("thinking", "first "), ("thinking", "second")]
+    # The answer must not carry the reasoning.
+    answers = [text for name, text in updater.artifacts if name == "response"]
+    assert "first" not in "".join(answers)
+
+
+async def test_pump_renders_a_markdown_plan_verbatim():
+    updater = await _pump_events(Plan(markdown="# rewrite the parser\n"))
+    assert updater.artifacts == [("plan", "# rewrite the parser\n")]
+
+
+async def test_pump_points_at_a_plan_the_agent_keeps_in_a_file():
+    updater = await _pump_events(Plan(uri="file:///tmp/plan.md"))
+    assert "file:///tmp/plan.md" in updater.artifacts[0][1]
 
 
 async def test_pump_relays_a_notice_as_a_status_update():

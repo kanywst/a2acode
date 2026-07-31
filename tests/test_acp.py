@@ -36,6 +36,7 @@ from a2acode.backends.base import (
     Plan,
     RunRequest,
     TextDelta,
+    Thought,
     ToolResult,
     ToolUse,
 )
@@ -210,12 +211,58 @@ def test_plan_content_update_with_items_maps_to_plan_steps():
     assert events[0].steps[0].content == "do the thing"
 
 
-def test_markdown_plan_is_not_flattened_into_steps():
+def test_markdown_plan_is_carried_as_prose_not_flattened_into_steps():
     update = s.AgentPlanContentUpdate(
         session_update="plan_update",
         plan=s.PlanUpdateMarkdown(type="markdown", id="p1", content="# do it"),
     )
+    events = list(events_from_update(update))
+
+    assert len(events) == 1
+    assert events[0] == Plan(markdown="# do it")
+    # No per-entry status exists to invent.
+    assert events[0].steps == []
+
+
+def test_file_plan_is_carried_as_a_pointer():
+    update = s.AgentPlanContentUpdate(
+        session_update="plan_update",
+        plan=s.PlanUpdateFile(type="file", id="p1", uri="file:///tmp/plan.md"),
+    )
+    assert list(events_from_update(update)) == [Plan(uri="file:///tmp/plan.md")]
+
+
+def test_thought_chunk_maps_to_a_thought():
+    update = s.AgentThoughtChunk(
+        session_update="agent_thought_chunk", content=text_block("hmm")
+    )
+    assert list(events_from_update(update)) == [Thought(text="hmm")]
+
+
+def test_empty_thought_chunk_yields_nothing():
+    update = s.AgentThoughtChunk(
+        session_update="agent_thought_chunk", content=text_block("")
+    )
     assert list(events_from_update(update)) == []
+
+
+def test_mode_switch_becomes_a_notice():
+    update = s.CurrentModeUpdate(
+        session_update="current_mode_update", current_mode_id="plan"
+    )
+    events = list(events_from_update(update))
+
+    assert len(events) == 1
+    assert isinstance(events[0], Notice)
+    assert "plan" in events[0].text
+
+
+def test_session_title_becomes_a_notice_and_an_untitled_one_does_not():
+    titled = s.SessionInfoUpdate(session_update="session_info_update", title="Fix auth")
+    assert "Fix auth" in next(iter(events_from_update(titled))).text
+
+    untitled = s.SessionInfoUpdate(session_update="session_info_update")
+    assert list(events_from_update(untitled)) == []
 
 
 def test_usage_update_yields_nothing():

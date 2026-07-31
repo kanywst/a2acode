@@ -10,11 +10,13 @@ a new backend.
 ACP maps almost one-to-one onto the backend event vocabulary:
 
     agent_message_chunk          -> TextDelta
+    agent_thought_chunk          -> Thought (kept out of the answer text)
     tool_call / tool_call_update -> ToolUse (+ FileChange for diff content)
     a terminal tool_call status  -> ToolResult (completed / failed, with output)
-    plan / plan_content_update   -> Plan (the agent's task list, by replacement)
+    plan / plan_update           -> Plan (the agent's task list, by replacement)
+    current_mode / session_info  -> Notice
     session/request_permission   -> PermissionRequest (the input-required pause)
-    PromptResponse usage + cost  -> Result
+    PromptResponse + cost        -> Result (usage, cost, stop reason)
 
 The permission round trip lands exactly on the session seam: the agent calls
 back into the client's ``request_permission``, which awaits
@@ -65,6 +67,7 @@ from .base import (
     Result,
     RunRequest,
     TextDelta,
+    Thought,
     ToolResult,
     ToolUse,
 )
@@ -103,6 +106,10 @@ def events_from_update(update: object) -> Iterator[BackendEvent]:
         text = getattr(update.content, "text", None)
         if text:
             yield TextDelta(text=text)
+    elif isinstance(update, s.AgentThoughtChunk):
+        text = getattr(update.content, "text", None)
+        if text:
+            yield Thought(text=text)
     elif isinstance(update, s.ToolCallStart):
         yield ToolUse(
             name=update.title or (update.kind or "tool"),
@@ -117,13 +124,14 @@ def events_from_update(update: object) -> Iterator[BackendEvent]:
         yield from _file_changes(update.content)
         yield from _tool_results(update)
     elif isinstance(update, s.AgentPlanUpdate):
-        yield _plan(update.entries)
+        yield Plan(steps=_steps(update.entries))
     elif isinstance(update, s.AgentPlanContentUpdate):
-        # The newer plan surface is a union; only the ``items`` variant carries
-        # per-entry status. The markdown and file variants are prose, so they
-        # are left alone rather than flattened into steps with invented states.
-        if isinstance(update.plan, s.PlanUpdateItems):
-            yield _plan(update.plan.entries)
+        yield _plan_content(update.plan)
+    elif isinstance(update, s.CurrentModeUpdate):
+        yield Notice(text=f"the agent switched to {update.current_mode_id} mode")
+    elif isinstance(update, s.SessionInfoUpdate):
+        if update.title:
+            yield Notice(text=f"the agent titled this session {update.title!r}")
 
 
 def select_option(options: Sequence[s.PermissionOption], *, allow: bool) -> str | None:
@@ -182,17 +190,31 @@ def prompt_blocks(
     return [text_block(append_to_prompt(request.prompt, inlined)), *images]
 
 
-def _plan(entries: Sequence[s.PlanEntry]) -> Plan:
-    return Plan(
-        steps=[
-            PlanStep(
-                content=entry.content,
-                status=entry.status,
-                priority=entry.priority or "",
-            )
-            for entry in entries
-        ]
-    )
+def _plan_content(plan: object) -> Plan:
+    """Map the plan-content union onto one Plan.
+
+    Only the ``items`` variant carries per-entry status; the other two are the
+    agent's own prose or a file it keeps the plan in, carried as-is rather than
+    flattened into steps with invented states.
+    """
+    if isinstance(plan, s.PlanUpdateItems):
+        return Plan(steps=_steps(plan.entries))
+    if isinstance(plan, s.PlanUpdateMarkdown):
+        return Plan(markdown=plan.content)
+    if isinstance(plan, s.PlanUpdateFile):
+        return Plan(uri=plan.uri)
+    return Plan()
+
+
+def _steps(entries: Sequence[s.PlanEntry]) -> list[PlanStep]:
+    return [
+        PlanStep(
+            content=entry.content,
+            status=entry.status,
+            priority=entry.priority or "",
+        )
+        for entry in entries
+    ]
 
 
 def _tool_results(update: s.ToolCallStart | s.ToolCallProgress) -> Iterator[ToolResult]:
@@ -473,13 +495,14 @@ class ACPBackend:
             prompt=prompt_blocks(request, agent.capabilities),
             session_id=session_id,
         )
-        usage = response.usage.model_dump() if response.usage else None
         await session.emit(
             Result(
                 session_id=session_id,
                 cost_usd=agent.client.cost_usd,
+                # ACP reports no turn count; its usage is token-based.
                 num_turns=None,
-                usage=usage,
+                usage=response.usage.model_dump() if response.usage else None,
+                stop_reason=response.stop_reason,
             )
         )
 

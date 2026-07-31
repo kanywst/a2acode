@@ -18,12 +18,13 @@ Most adapters that put a coding agent behind A2A flatten everything to text in, 
 | The coding agent produces   | A2A surface it lands on                            |
 | --------------------------- | -------------------------------------------------- |
 | Assistant text              | A streamed artifact (`append` / `last_chunk`)      |
+| Its reasoning               | A separate `thinking` artifact, never the answer   |
 | A tool call (Bash, Edit)    | A `working` status update for the action           |
 | That tool's outcome         | A `working` status update: `✓ Bash` / `✗ Bash: …`  |
 | Its plan for the turn       | A `plan` artifact, replaced as steps progress      |
 | A file edit (diff)          | A named artifact carrying the diff                 |
 | A permission request        | An `input-required` pause the caller answers       |
-| Run result                  | Cost, turns, and usage on the completion message   |
+| Run result                  | Cost, usage, and stop reason on the completion     |
 | Session id                  | Mapped to the A2A `contextId` so follow-ups resume |
 
 The mapping is all in `executor.py`. Backends only emit normalized events; they never touch the protocol.
