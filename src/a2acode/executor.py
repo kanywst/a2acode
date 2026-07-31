@@ -6,6 +6,7 @@ Translates a backend's normalized event stream into A2A task lifecycle events:
     tool use            -> a working-state status update describing the action
     tool result         -> a working-state status update carrying the outcome
     file change         -> a named artifact carrying the diff
+    plan                -> a "plan" artifact, replaced on every update
     permission request  -> an input-required pause the caller answers
     result              -> run metadata on the completion message + continuity
 
@@ -32,6 +33,7 @@ from .backends.base import (
     FileChange,
     PermissionDecision,
     PermissionRequest,
+    Plan,
     Result,
     RunRequest,
     TextDelta,
@@ -53,6 +55,9 @@ _ALLOW_WORDS = {"allow", "yes", "y", "approve", "ok", "accept", "grant"}
 _MAX_CONTEXTS = 4096
 _MAX_LIVE = 256
 
+# Checklist markers for a plan step's status; anything else renders as open.
+_PLAN_MARKS = {"completed": "x", "in_progress": ">"}
+
 
 @dataclass
 class _Stream:
@@ -66,6 +71,9 @@ class _Stream:
     # tool_use_id -> name, so a ToolResult that omits the title can still be
     # reported against the tool the caller watched start.
     tool_names: dict[str, str] = field(default_factory=dict)
+    # One artifact id for the plan, reused so each update replaces the previous
+    # plan instead of appending another copy of it.
+    plan_artifact_id: str = ""
 
 
 def _build_prompt(context: RequestContext) -> str:
@@ -125,6 +133,20 @@ def _describe_result(event: ToolResult, name: str) -> str:
         return f"✓ {name}"
     reason = event.output.strip().splitlines()[0][:200] if event.output.strip() else ""
     return f"✗ {name}: {reason}" if reason else f"✗ {name}"
+
+
+def _render_plan(plan: Plan) -> str:
+    """Render a plan as a markdown checklist.
+
+    ``in_progress`` gets its own marker rather than collapsing into "not done":
+    which step the agent is on is the whole reason a caller watches the plan.
+    """
+    lines = []
+    for step in plan.steps:
+        mark = _PLAN_MARKS.get(step.status, " ")
+        prefix = "(high) " if step.priority == "high" else ""
+        lines.append(f"- [{mark}] {prefix}{step.content}")
+    return "\n".join(lines) + "\n"
 
 
 class ClaudeCodeExecutor(AgentExecutor):
@@ -246,6 +268,22 @@ class ClaudeCodeExecutor(AgentExecutor):
                         [Part(text=event.diff, media_type="text/x-diff")],
                         name=event.path,
                     )
+                elif isinstance(event, Plan):
+                    if event.steps:
+                        if not stream.plan_artifact_id:
+                            stream.plan_artifact_id = uuid4().hex
+                        await updater.add_artifact(
+                            [
+                                Part(
+                                    text=_render_plan(event),
+                                    media_type="text/markdown",
+                                )
+                            ],
+                            artifact_id=stream.plan_artifact_id,
+                            name="plan",
+                            append=False,
+                            last_chunk=True,
+                        )
                 elif isinstance(event, PermissionRequest):
                     if stream.pending is not None:
                         stream.chunks.append(stream.pending)

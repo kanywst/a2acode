@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from typing import Any
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -35,13 +36,25 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
-from .base import BackendEvent, Result, RunRequest, TextDelta, ToolResult, ToolUse
+from .base import (
+    BackendEvent,
+    Plan,
+    PlanStep,
+    Result,
+    RunRequest,
+    TextDelta,
+    ToolResult,
+    ToolUse,
+)
 from .diff import file_changes
 from .session import BackendSession
 
 # Tool output is relayed as a short excerpt; a single result can be a whole test
 # run or file dump.
 _MAX_TOOL_OUTPUT = 2000
+
+# The tool whose input carries Claude's plan for the turn.
+_PLAN_TOOL = "TodoWrite"
 
 
 def events_from_message(message: object) -> Iterator[BackendEvent]:
@@ -59,6 +72,8 @@ def events_from_message(message: object) -> Iterator[BackendEvent]:
                 tool_input = dict(block.input or {})
                 yield ToolUse(block.name, tool_input, block.id)
                 yield from file_changes(block.name, tool_input)
+                if block.name == _PLAN_TOOL:
+                    yield from _plan_from_todos(tool_input)
     elif isinstance(message, UserMessage):
         # Tool results come back as a user message: this is where the run says
         # whether the tool the caller just watched start actually succeeded.
@@ -73,6 +88,29 @@ def events_from_message(message: object) -> Iterator[BackendEvent]:
             num_turns=message.num_turns,
             usage=message.usage,
         )
+
+
+def _plan_from_todos(tool_input: dict[str, Any]) -> Iterator[Plan]:
+    """Derive the agent's plan from a TodoWrite call.
+
+    The Claude SDK has no plan message of its own; the todo list *is* the plan,
+    and it arrives as the input to a tool call. ACP models the same thing as a
+    first-class session update, so this is where the two backends converge on
+    one event.
+    """
+    todos = tool_input.get("todos")
+    if not isinstance(todos, list):
+        return
+    steps = [
+        PlanStep(
+            content=str(todo.get("content")),
+            status=str(todo.get("status") or "pending"),
+        )
+        for todo in todos
+        if isinstance(todo, dict) and todo.get("content")
+    ]
+    if steps:
+        yield Plan(steps=steps)
 
 
 def _tool_result(block: ToolResultBlock) -> ToolResult:

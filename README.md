@@ -20,6 +20,7 @@ Most adapters that put a coding agent behind A2A flatten everything to text in, 
 | Assistant text              | A streamed artifact (`append` / `last_chunk`)      |
 | A tool call (Bash, Edit)    | A `working` status update for the action           |
 | That tool's outcome         | A `working` status update: `✓ Bash` / `✗ Bash: …`  |
+| Its plan for the turn       | A `plan` artifact, replaced as steps progress      |
 | A file edit (diff)          | A named artifact carrying the diff                 |
 | A permission request        | An `input-required` pause the caller answers       |
 | Run result                  | Cost, turns, and usage on the completion message   |

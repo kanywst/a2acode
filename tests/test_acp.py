@@ -8,7 +8,14 @@ permission round trip is driven against a fake session.
 from __future__ import annotations
 
 import pytest
-from acp import image_block, text_block, tool_content, tool_diff_content
+from acp import (
+    image_block,
+    plan_entry,
+    text_block,
+    tool_content,
+    tool_diff_content,
+    update_plan,
+)
 from acp import schema as s
 
 from a2acode.backends.acp import (
@@ -19,6 +26,7 @@ from a2acode.backends.acp import (
 from a2acode.backends.base import (
     FileChange,
     PermissionDecision,
+    Plan,
     TextDelta,
     ToolResult,
     ToolUse,
@@ -159,6 +167,46 @@ def test_non_text_tool_content_is_skipped():
         content=[tool_content(image_block("ZGF0YQ==", "image/png"))],
     )
     assert next(iter(events_from_update(update))).output == ""
+
+
+def test_plan_update_maps_to_plan_steps():
+    update = update_plan(
+        [
+            plan_entry("read the code", status="completed", priority="high"),
+            plan_entry("write the fix", status="in_progress"),
+        ]
+    )
+    events = list(events_from_update(update))
+
+    assert len(events) == 1
+    plan = events[0]
+    assert isinstance(plan, Plan)
+    assert [(step.content, step.status, step.priority) for step in plan.steps] == [
+        ("read the code", "completed", "high"),
+        ("write the fix", "in_progress", "medium"),
+    ]
+
+
+def test_plan_content_update_with_items_maps_to_plan_steps():
+    update = s.AgentPlanContentUpdate(
+        session_update="plan_update",
+        plan=s.PlanUpdateItems(
+            type="items", id="p1", entries=[plan_entry("do the thing")]
+        ),
+    )
+    events = list(events_from_update(update))
+
+    assert len(events) == 1
+    assert isinstance(events[0], Plan)
+    assert events[0].steps[0].content == "do the thing"
+
+
+def test_markdown_plan_is_not_flattened_into_steps():
+    update = s.AgentPlanContentUpdate(
+        session_update="plan_update",
+        plan=s.PlanUpdateMarkdown(type="markdown", id="p1", content="# do it"),
+    )
+    assert list(events_from_update(update)) == []
 
 
 def test_usage_update_yields_nothing():

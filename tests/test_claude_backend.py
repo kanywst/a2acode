@@ -13,6 +13,7 @@ from claude_agent_sdk import (
 
 from a2acode.backends.base import (
     FileChange,
+    Plan,
     Result,
     RunRequest,
     TextDelta,
@@ -96,6 +97,40 @@ def test_errored_tool_result_is_flagged_and_block_content_is_joined():
     assert result.failed
     # The image block carries no text, so it is skipped rather than stringified.
     assert result.output == "boom"
+
+
+def test_todowrite_yields_a_plan_alongside_the_tool_use():
+    message = AssistantMessage(
+        content=[
+            ToolUseBlock(
+                id="t1",
+                name="TodoWrite",
+                input={
+                    "todos": [
+                        {"content": "read the code", "status": "completed"},
+                        {"content": "write the fix", "status": "in_progress"},
+                    ]
+                },
+            )
+        ],
+        model="claude-test",
+    )
+    events = list(events_from_message(message))
+
+    assert [type(e) for e in events] == [ToolUse, Plan]
+    assert [(s.content, s.status) for s in events[1].steps] == [
+        ("read the code", "completed"),
+        ("write the fix", "in_progress"),
+    ]
+
+
+def test_malformed_todos_do_not_raise():
+    for todos in ("oops", [1, "x"], []):
+        message = AssistantMessage(
+            content=[ToolUseBlock(id="t1", name="TodoWrite", input={"todos": todos})],
+            model="claude-test",
+        )
+        assert [type(e) for e in events_from_message(message)] == [ToolUse]
 
 
 def test_plain_text_user_message_yields_nothing():

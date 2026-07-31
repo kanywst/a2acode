@@ -5,6 +5,8 @@ from __future__ import annotations
 from a2acode import executor as executor_mod
 from a2acode.backends import (
     BackendSession,
+    Plan,
+    PlanStep,
     RunRequest,
     ToolResult,
     ToolUse,
@@ -108,12 +110,14 @@ class _RecordingUpdater:
         self.did_complete = False
         self.status_lines: list[str] = []
         self.artifacts: list[tuple[str | None, str]] = []
+        self.artifact_ids: list[str | None] = []
 
     def new_agent_message(self, parts, metadata=None):
         return parts
 
-    async def add_artifact(self, parts, *, name=None, **_kwargs):
+    async def add_artifact(self, parts, *, name=None, artifact_id=None, **_kwargs):
         self.artifacts.append((name, "".join(p.text for p in parts)))
+        self.artifact_ids.append(artifact_id)
 
     async def update_status(self, _state, message=None):
         self.status_lines.append("".join(p.text for p in message or []))
@@ -164,6 +168,29 @@ async def test_pump_reports_a_failure_with_its_first_line():
 async def test_pump_falls_back_when_a_result_has_no_matching_tool_use():
     updater = await _pump_events(ToolResult(tool_use_id="unknown"))
     assert updater.status_lines == ["✓ tool"]
+
+
+async def test_pump_replaces_the_plan_artifact_on_every_update():
+    updater = await _pump_events(
+        Plan(steps=[PlanStep(content="step one", status="in_progress")]),
+        Plan(
+            steps=[
+                PlanStep(content="step one", status="completed"),
+                PlanStep(content="step two", priority="high"),
+            ]
+        ),
+    )
+    names = [name for name, _ in updater.artifacts]
+    assert names == ["plan", "plan"]
+    assert updater.artifacts[0][1] == "- [>] step one\n"
+    assert updater.artifacts[1][1] == "- [x] step one\n- [ ] (high) step two\n"
+    # One artifact id across updates, so the caller replaces rather than stacks.
+    assert len({a for a in updater.artifact_ids if a}) == 1
+
+
+async def test_pump_skips_an_empty_plan():
+    updater = await _pump_events(Plan(steps=[]))
+    assert updater.artifacts == []
 
 
 async def test_pump_fails_an_evicted_session():

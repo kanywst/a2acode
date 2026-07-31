@@ -12,6 +12,7 @@ ACP maps almost one-to-one onto the backend event vocabulary:
     agent_message_chunk          -> TextDelta
     tool_call / tool_call_update -> ToolUse (+ FileChange for diff content)
     a terminal tool_call status  -> ToolResult (completed / failed, with output)
+    plan / plan_content_update   -> Plan (the agent's task list, by replacement)
     session/request_permission   -> PermissionRequest (the input-required pause)
     PromptResponse usage + cost  -> Result
 
@@ -39,6 +40,8 @@ from acp import schema as s
 from .base import (
     BackendEvent,
     FileChange,
+    Plan,
+    PlanStep,
     Result,
     RunRequest,
     TextDelta,
@@ -86,6 +89,14 @@ def events_from_update(update: object) -> Iterator[BackendEvent]:
         # updates carry it. The ToolUse was already emitted on the start event.
         yield from _file_changes(update.content)
         yield from _tool_results(update)
+    elif isinstance(update, s.AgentPlanUpdate):
+        yield _plan(update.entries)
+    elif isinstance(update, s.AgentPlanContentUpdate):
+        # The newer plan surface is a union; only the ``items`` variant carries
+        # per-entry status. The markdown and file variants are prose, so they
+        # are left alone rather than flattened into steps with invented states.
+        if isinstance(update.plan, s.PlanUpdateItems):
+            yield _plan(update.plan.entries)
 
 
 def select_option(options: Sequence[s.PermissionOption], *, allow: bool) -> str | None:
@@ -112,6 +123,19 @@ def select_option(options: Sequence[s.PermissionOption], *, allow: bool) -> str 
 
 def _as_dict(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _plan(entries: Sequence[s.PlanEntry]) -> Plan:
+    return Plan(
+        steps=[
+            PlanStep(
+                content=entry.content,
+                status=entry.status,
+                priority=entry.priority or "",
+            )
+            for entry in entries
+        ]
+    )
 
 
 def _tool_results(update: s.ToolCallStart | s.ToolCallProgress) -> Iterator[ToolResult]:

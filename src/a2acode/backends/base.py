@@ -61,6 +61,27 @@ class FileChange:
 
 
 @dataclass(slots=True)
+class PlanStep:
+    """One entry in the agent's plan."""
+
+    content: str
+    status: str = "pending"
+    priority: str = ""
+
+
+@dataclass(slots=True)
+class Plan:
+    """The agent's current plan for the turn.
+
+    Every update carries the whole plan: agents report plans by replacement
+    rather than by delta, so a consumer renders the latest one instead of
+    accumulating them.
+    """
+
+    steps: list[PlanStep]
+
+
+@dataclass(slots=True)
 class PermissionRequest:
     """A tool needs the caller's approval before it can run."""
 
@@ -90,7 +111,7 @@ class Result:
 
 
 BackendEvent = (
-    TextDelta | ToolUse | ToolResult | FileChange | PermissionRequest | Result
+    TextDelta | ToolUse | ToolResult | FileChange | Plan | PermissionRequest | Result
 )
 
 
