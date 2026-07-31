@@ -20,7 +20,8 @@ The permission round trip lands exactly on the session seam: the agent calls
 back into the client's ``request_permission``, which awaits
 ``session.request_permission`` and parks until the A2A caller answers — the same
 parked-across-two-execute-calls behavior the Claude backend gets through
-``can_use_tool``.
+``can_use_tool``. Cancellation runs the same seam in reverse: the session's
+canceller sends ``session/cancel`` so the agent ends the turn itself.
 
 ``events_from_update`` and ``select_option`` are pure and side-effect free so the
 protocol translation is unit-testable without launching an agent subprocess.
@@ -337,6 +338,10 @@ class ACPBackend:
                 ),
             )
             session_id = await self._open_session(conn, init, request, session)
+            # An A2A cancel now reaches the agent as session/cancel, which ends
+            # the turn cleanly, instead of only killing its process from under
+            # whatever tool was mid-flight.
+            session.set_canceller(lambda: conn.cancel(session_id=session_id))
             response = await conn.prompt(
                 prompt=[text_block(request.prompt)], session_id=session_id
             )

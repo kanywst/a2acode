@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from a2acode.backends import (
@@ -14,6 +16,7 @@ from a2acode.backends import (
     ToolUse,
     make_backend,
 )
+from a2acode.backends import session as session_mod
 from a2acode.backends.diff import file_changes
 from a2acode.server import build_app
 
@@ -133,6 +136,69 @@ async def test_resolve_unknown_request_raises():
     session = BackendSession()
     with pytest.raises(ValueError):
         session.resolve(PermissionDecision(request_id="missing", allow=True))
+
+
+async def test_close_asks_the_agent_to_stop_before_cancelling():
+    stopped = asyncio.Event()
+
+    async def _forever(_session):
+        await stopped.wait()
+
+    async def _cancel():
+        # A real agent ends its turn on cancel, so the runner finishes itself.
+        stopped.set()
+
+    session = BackendSession()
+    session.start(_forever)
+    session.set_canceller(_cancel)
+    await asyncio.sleep(0)
+
+    await session.close()
+
+    assert stopped.is_set()
+    # The run ended on its own, so it was never hard-cancelled.
+    assert session._runner is not None and not session._runner.cancelled()
+
+
+async def test_close_still_cancels_an_agent_that_ignores_the_stop(monkeypatch):
+    monkeypatch.setattr(session_mod, "_CANCEL_TIMEOUT", 0.05)
+    called = False
+
+    async def _forever(_session):
+        await asyncio.Event().wait()
+
+    async def _cancel():
+        nonlocal called
+        called = True
+
+    session = BackendSession()
+    session.start(_forever)
+    session.set_canceller(_cancel)
+    await asyncio.sleep(0)
+
+    await session.close()
+
+    assert called
+    assert session._runner is not None and session._runner.cancelled()
+
+
+async def test_close_survives_a_canceller_that_fails(monkeypatch):
+    monkeypatch.setattr(session_mod, "_CANCEL_TIMEOUT", 0.05)
+
+    async def _forever(_session):
+        await asyncio.Event().wait()
+
+    async def _cancel():
+        raise RuntimeError("the agent is gone")
+
+    session = BackendSession()
+    session.start(_forever)
+    session.set_canceller(_cancel)
+    await asyncio.sleep(0)
+
+    await session.close()
+
+    assert session._runner is not None and session._runner.cancelled()
 
 
 def test_build_app_returns_asgi_app():
