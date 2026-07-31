@@ -9,7 +9,7 @@ verified without a live Claude session.
 
 from __future__ import annotations
 
-from .base import Result, RunRequest, TextDelta, ToolUse
+from .base import Result, RunRequest, TextDelta, ToolResult, ToolUse
 from .session import BackendSession
 
 
@@ -30,10 +30,19 @@ class EchoBackend:
                 "Bash", {"command": request.prompt}, f"$ {request.prompt}"
             )
             if not decision.allow:
+                await session.emit(
+                    ToolResult(
+                        tool_use_id="echo-1",
+                        name="Echo",
+                        failed=True,
+                        output="permission denied",
+                    )
+                )
                 await session.emit(TextDelta("permission denied; nothing run"))
                 await session.emit(self._result(request))
                 return
 
+        await session.emit(ToolResult(tool_use_id="echo-1", name="Echo"))
         for word in request.prompt.split():
             await session.emit(TextDelta(word + " "))
         await session.emit(self._result(request))

@@ -4,6 +4,7 @@ Translates a backend's normalized event stream into A2A task lifecycle events:
 
     text                -> a streamed artifact (append / last_chunk)
     tool use            -> a working-state status update describing the action
+    tool result         -> a working-state status update carrying the outcome
     file change         -> a named artifact carrying the diff
     permission request  -> an input-required pause the caller answers
     result              -> run metadata on the completion message + continuity
@@ -34,6 +35,7 @@ from .backends.base import (
     Result,
     RunRequest,
     TextDelta,
+    ToolResult,
     ToolUse,
 )
 from .backends.session import BackendSession
@@ -61,6 +63,9 @@ class _Stream:
     pending: str | None = None
     sent_first: bool = False
     metadata: dict[str, object] = field(default_factory=dict)
+    # tool_use_id -> name, so a ToolResult that omits the title can still be
+    # reported against the tool the caller watched start.
+    tool_names: dict[str, str] = field(default_factory=dict)
 
 
 def _build_prompt(context: RequestContext) -> str:
@@ -107,6 +112,19 @@ def _describe_tool(event: ToolUse) -> str:
     if path:
         return f"{event.name} {path}"
     return event.name
+
+
+def _describe_result(event: ToolResult, name: str) -> str:
+    """A short line for a tool's outcome.
+
+    Successful output is left out: the caller already saw the action announced,
+    and a passing tool's stdout is noise on a status update. A failure carries
+    its first line, which is the part that explains what went wrong.
+    """
+    if not event.failed:
+        return f"✓ {name}"
+    reason = event.output.strip().splitlines()[0][:200] if event.output.strip() else ""
+    return f"✗ {name}: {reason}" if reason else f"✗ {name}"
 
 
 class ClaudeCodeExecutor(AgentExecutor):
@@ -206,10 +224,21 @@ class ClaudeCodeExecutor(AgentExecutor):
                         await flush(stream.pending, last=False)
                     stream.pending = event.text
                 elif isinstance(event, ToolUse):
+                    stream.tool_names[event.tool_use_id] = event.name
                     await updater.update_status(
                         TaskState.TASK_STATE_WORKING,
                         message=updater.new_agent_message(
                             [Part(text=_describe_tool(event))]
+                        ),
+                    )
+                elif isinstance(event, ToolResult):
+                    name = (
+                        event.name or stream.tool_names.get(event.tool_use_id) or "tool"
+                    )
+                    await updater.update_status(
+                        TaskState.TASK_STATE_WORKING,
+                        message=updater.new_agent_message(
+                            [Part(text=_describe_result(event, name))]
                         ),
                     )
                 elif isinstance(event, FileChange):

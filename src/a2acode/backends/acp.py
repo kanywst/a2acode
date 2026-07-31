@@ -11,6 +11,7 @@ ACP maps almost one-to-one onto the backend event vocabulary:
 
     agent_message_chunk          -> TextDelta
     tool_call / tool_call_update -> ToolUse (+ FileChange for diff content)
+    a terminal tool_call status  -> ToolResult (completed / failed, with output)
     session/request_permission   -> PermissionRequest (the input-required pause)
     PromptResponse usage + cost  -> Result
 
@@ -35,9 +36,21 @@ from typing import Any
 from acp import PROTOCOL_VERSION, Client, spawn_agent_process, text_block
 from acp import schema as s
 
-from .base import BackendEvent, FileChange, Result, RunRequest, TextDelta, ToolUse
+from .base import (
+    BackendEvent,
+    FileChange,
+    Result,
+    RunRequest,
+    TextDelta,
+    ToolResult,
+    ToolUse,
+)
 from .diff import unified_diff
 from .session import BackendSession
+
+# Tool output is relayed as a short excerpt: it arrives on every status update
+# and can be arbitrarily large (a whole test run, a file dump).
+_MAX_TOOL_OUTPUT = 2000
 
 # How to launch each known ACP agent adapter as a subprocess. A preset is just a
 # default command; pass an explicit ``command``/``args`` to drive any other ACP
@@ -67,10 +80,12 @@ def events_from_update(update: object) -> Iterator[BackendEvent]:
             tool_use_id=update.tool_call_id,
         )
         yield from _file_changes(update.content)
+        yield from _tool_results(update)
     elif isinstance(update, s.ToolCallProgress):
         # A diff is often not ready when the tool call opens; later progress
         # updates carry it. The ToolUse was already emitted on the start event.
         yield from _file_changes(update.content)
+        yield from _tool_results(update)
 
 
 def select_option(options: Sequence[s.PermissionOption], *, allow: bool) -> str | None:
@@ -97,6 +112,41 @@ def select_option(options: Sequence[s.PermissionOption], *, allow: bool) -> str 
 
 def _as_dict(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _tool_results(update: s.ToolCallStart | s.ToolCallProgress) -> Iterator[ToolResult]:
+    """Emit a tool's outcome once its status is terminal.
+
+    ACP reports a tool call as a series of updates; ``pending`` and
+    ``in_progress`` say nothing a caller can act on, so only ``completed`` and
+    ``failed`` become an event. An agent that never reports a status simply
+    produces no ToolResult, which is why the executor treats it as optional.
+    """
+    if update.status not in ("completed", "failed"):
+        return
+    yield ToolResult(
+        tool_use_id=update.tool_call_id,
+        name=update.title or "",
+        failed=update.status == "failed",
+        output=_tool_output(update.content),
+    )
+
+
+def _tool_output(content: Sequence[object] | None) -> str:
+    """Collect the text an agent attached to a tool call, capped.
+
+    Tool output is unbounded (a full test run, a file dump), and it travels on
+    every status update, so it is truncated rather than relayed whole.
+    """
+    texts = [
+        item.content.text
+        for item in content or []
+        if isinstance(item, s.ContentToolCallContent)
+        and isinstance(item.content, s.TextContentBlock)
+        and item.content.text
+    ]
+    out = "\n".join(texts)
+    return out if len(out) <= _MAX_TOOL_OUTPUT else out[:_MAX_TOOL_OUTPUT] + " …"
 
 
 def _file_changes(content: Sequence[object] | None) -> Iterator[FileChange]:

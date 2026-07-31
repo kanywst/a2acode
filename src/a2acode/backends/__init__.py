@@ -11,6 +11,7 @@ from .base import (
     Result,
     RunRequest,
     TextDelta,
+    ToolResult,
     ToolUse,
 )
 from .echo import EchoBackend
@@ -26,6 +27,7 @@ __all__ = [
     "Result",
     "RunRequest",
     "TextDelta",
+    "ToolResult",
     "ToolUse",
     "EchoBackend",
     "make_backend",

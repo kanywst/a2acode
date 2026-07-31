@@ -37,6 +37,22 @@ class ToolUse:
 
 
 @dataclass(slots=True)
+class ToolResult:
+    """A tool call reached a terminal state.
+
+    Emitted only once the outcome is known, so a caller that saw the matching
+    ``ToolUse`` learns whether the action actually succeeded. ``name`` is
+    best-effort: an agent may report the outcome without repeating the title, in
+    which case the consumer falls back to the name from the ``ToolUse``.
+    """
+
+    tool_use_id: str
+    name: str = ""
+    failed: bool = False
+    output: str = ""
+
+
+@dataclass(slots=True)
 class FileChange:
     """A file was written or edited during the run."""
 
@@ -73,7 +89,9 @@ class Result:
     usage: dict[str, Any] | None = None
 
 
-BackendEvent = TextDelta | ToolUse | FileChange | PermissionRequest | Result
+BackendEvent = (
+    TextDelta | ToolUse | ToolResult | FileChange | PermissionRequest | Result
+)
 
 
 @dataclass(slots=True)

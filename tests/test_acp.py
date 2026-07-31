@@ -8,8 +8,8 @@ permission round trip is driven against a fake session.
 from __future__ import annotations
 
 import pytest
+from acp import image_block, text_block, tool_content, tool_diff_content
 from acp import schema as s
-from acp import text_block, tool_diff_content
 
 from a2acode.backends.acp import (
     _BridgeClient,
@@ -20,6 +20,7 @@ from a2acode.backends.base import (
     FileChange,
     PermissionDecision,
     TextDelta,
+    ToolResult,
     ToolUse,
 )
 
@@ -81,6 +82,83 @@ def test_tool_call_progress_yields_only_filechange():
     assert isinstance(events[0], FileChange)
     assert "-x = 1" in events[0].diff
     assert "+y = 2" in events[0].diff
+
+
+def test_completed_tool_call_yields_tool_result_with_output():
+    update = s.ToolCallProgress(
+        session_update="tool_call_update",
+        tool_call_id="t1",
+        title="Run ls",
+        status="completed",
+        content=[tool_content(text_block("a.py\nb.py\n"))],
+    )
+    events = list(events_from_update(update))
+
+    assert len(events) == 1
+    result = events[0]
+    assert isinstance(result, ToolResult)
+    assert result.tool_use_id == "t1"
+    assert result.name == "Run ls"
+    assert not result.failed
+    assert result.output == "a.py\nb.py\n"
+
+
+def test_failed_tool_call_is_flagged():
+    update = s.ToolCallProgress(
+        session_update="tool_call_update",
+        tool_call_id="t1",
+        status="failed",
+        content=[tool_content(text_block("command not found"))],
+    )
+    events = list(events_from_update(update))
+
+    assert len(events) == 1
+    assert isinstance(events[0], ToolResult)
+    assert events[0].failed
+    # No title on the update: the consumer falls back to the ToolUse's name.
+    assert events[0].name == ""
+
+
+def test_non_terminal_tool_status_yields_no_result():
+    for status in ("pending", "in_progress"):
+        update = s.ToolCallProgress(
+            session_update="tool_call_update", tool_call_id="t1", status=status
+        )
+        assert list(events_from_update(update)) == []
+
+
+def test_tool_call_start_with_terminal_status_yields_result():
+    update = s.ToolCallStart(
+        session_update="tool_call",
+        tool_call_id="t1",
+        title="Read a.py",
+        status="completed",
+    )
+    events = list(events_from_update(update))
+
+    assert [type(e) for e in events] == [ToolUse, ToolResult]
+
+
+def test_tool_output_is_capped():
+    update = s.ToolCallProgress(
+        session_update="tool_call_update",
+        tool_call_id="t1",
+        status="completed",
+        content=[tool_content(text_block("x" * 5000))],
+    )
+    output = next(iter(events_from_update(update))).output
+    assert output.endswith(" …")
+    assert len(output) == 2002
+
+
+def test_non_text_tool_content_is_skipped():
+    update = s.ToolCallProgress(
+        session_update="tool_call_update",
+        tool_call_id="t1",
+        status="completed",
+        content=[tool_content(image_block("ZGF0YQ==", "image/png"))],
+    )
+    assert next(iter(events_from_update(update))).output == ""
 
 
 def test_usage_update_yields_nothing():

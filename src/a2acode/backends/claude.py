@@ -30,12 +30,18 @@ from claude_agent_sdk import (
     ResultMessage,
     SettingSource,
     TextBlock,
+    ToolResultBlock,
     ToolUseBlock,
+    UserMessage,
 )
 
-from .base import BackendEvent, Result, RunRequest, TextDelta, ToolUse
+from .base import BackendEvent, Result, RunRequest, TextDelta, ToolResult, ToolUse
 from .diff import file_changes
 from .session import BackendSession
+
+# Tool output is relayed as a short excerpt; a single result can be a whole test
+# run or file dump.
+_MAX_TOOL_OUTPUT = 2000
 
 
 def events_from_message(message: object) -> Iterator[BackendEvent]:
@@ -53,6 +59,13 @@ def events_from_message(message: object) -> Iterator[BackendEvent]:
                 tool_input = dict(block.input or {})
                 yield ToolUse(block.name, tool_input, block.id)
                 yield from file_changes(block.name, tool_input)
+    elif isinstance(message, UserMessage):
+        # Tool results come back as a user message: this is where the run says
+        # whether the tool the caller just watched start actually succeeded.
+        if isinstance(message.content, list):
+            for block in message.content:
+                if isinstance(block, ToolResultBlock):
+                    yield _tool_result(block)
     elif isinstance(message, ResultMessage):
         yield Result(
             session_id=message.session_id,
@@ -60,6 +73,29 @@ def events_from_message(message: object) -> Iterator[BackendEvent]:
             num_turns=message.num_turns,
             usage=message.usage,
         )
+
+
+def _tool_result(block: ToolResultBlock) -> ToolResult:
+    """Normalize one tool result.
+
+    The SDK's content is either a plain string or the raw block list the tool
+    returned; only the text of the latter is meaningful to a remote caller, so
+    non-text blocks are skipped rather than stringified.
+    """
+    content = block.content
+    if isinstance(content, list):
+        text = "\n".join(
+            str(item.get("text", ""))
+            for item in content
+            if isinstance(item, dict) and item.get("text")
+        )
+    else:
+        text = content or ""
+    if len(text) > _MAX_TOOL_OUTPUT:
+        text = text[:_MAX_TOOL_OUTPUT] + " …"
+    return ToolResult(
+        tool_use_id=block.tool_use_id, failed=bool(block.is_error), output=text
+    )
 
 
 class ClaudeBackend:
