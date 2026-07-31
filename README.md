@@ -195,7 +195,7 @@ git push origin v0.1.0
 
 ## Status
 
-The mapping is complete end to end and verified against real Claude: text round trip, tool-progress updates, streaming artifacts, file diffs as artifacts, run metadata, session continuity, the permission-to-`input-required` round trip, and push notifications. The offline `echo` backend covers every path including permissions, so it can all be exercised without an API key.
+The mapping is complete end to end and verified against real Claude: text round trip, tool calls and their outcomes, the agent's plan, streaming artifacts, file diffs as artifacts, caller attachments, run metadata, session continuity, the permission-to-`input-required` round trip, and push notifications. The offline `echo` backend covers every path including permissions and attachments, so it can all be exercised without an API key.
 
 ## License
 

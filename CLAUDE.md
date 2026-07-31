@@ -44,27 +44,46 @@ CLI / A2A caller
         -> acp.py       drives any ACP agent as a subprocess (default; agent-neutral)
         -> claude.py    drives the Claude Agent SDK directly (ClaudeSDKClient)
         -> echo.py      dependency-free mirror, for tests and offline wiring checks
+        -> attach.py    renders caller attachments into a prompt (shared, pure)
 ```
 
 The `acp` backend is the headline: ACP's `session/update` stream, diff content, and `session/request_permission` map almost one-to-one onto the event vocabulary below, so vendor-neutrality is a launch-command choice rather than a backend per agent. ACP itself targets human-driven editors; a2acode's value is exposing an ACP agent to *remote A2A callers* with the permission round-trip and cost preserved.
 
 ### The event vocabulary (`backends/base.py`)
 
-Every backend speaks the same five events, and the executor maps each onto an A2A surface:
+Every backend speaks the same event vocabulary, and the executor maps each onto an A2A surface:
 
-| Backend event       | A2A surface                                             |
-| ------------------- | ------------------------------------------------------- |
+| Backend event       | A2A surface                                              |
+| ------------------- | -------------------------------------------------------- |
 | `TextDelta`         | a streamed `response` artifact (`append` / `last_chunk`) |
 | `ToolUse`           | a `working` status update describing the action          |
+| `ToolResult`        | a `working` status update carrying the outcome           |
 | `FileChange`        | a named artifact carrying a unified diff                 |
+| `Plan`              | a `plan` artifact, replaced on each update               |
+| `Notice`            | a `working` status update about the run itself           |
 | `PermissionRequest` | an `input-required` pause the caller answers             |
 | `Result`            | cost / turns / usage metadata on the completion message  |
 
-A `Backend` is a `Protocol` (`name` + `async drive(session, request)`), so any object with that shape qualifies.
+`ToolResult` is optional in both protocols — an agent may never report a terminal status — so the executor treats a missing one as "no outcome reported" rather than assuming success, and resolves the tool's name against the earlier `ToolUse`. `Notice` is the one event the agent does not produce: it is the server telling the caller it had to run the turn differently than asked (a resume the agent cannot honour).
+
+`RunRequest` carries the caller's `Attachment`s alongside the prompt; `attach.py` renders them into prompt text, and a backend that can pass a part natively (an ACP agent advertising image support) handles that one itself first.
+
+A `Backend` is a `Protocol` (`name` + `async drive(session, request)`), so any object with that shape qualifies. A backend that holds resources across runs also implements `ClosableBackend` (`aclose`), which `build_app` calls on shutdown.
 
 ### Session decoupling (`backends/session.py`)
 
 `BackendSession` is the seam that makes the permission round trip work. The backend's `drive` coroutine runs as a background task pushing events onto a queue; the executor consumes them with `drain()`, which **stops** when it hits a `PermissionRequest`, leaving the background task parked inside `request_permission` awaiting a decision. A later `resolve()` un-parks it. This is what lets one A2A `input-required` round trip span two separate `execute()` calls while the Claude session stays alive in between.
+
+Shutdown runs the seam the other way. `close()` first calls whatever the backend registered with `set_canceller()` — for ACP, `session/cancel` — and gives the run a bounded chance to wind down before cancelling the runner task. A backend that registers nothing falls through to the same hard cancel as before.
+
+### The ACP agent pool (`backends/acp.py`)
+
+An agent subprocess is kept alive per A2A context, not per turn: spawning one costs a process launch, an ACP handshake, and a `session/load`, all of which a follow-up turn in the same conversation skips by talking to the process that already holds it. Consequences worth knowing before touching it:
+
+- One `_BridgeClient` serves a connection for its whole life, so it is **rebound per turn** (`bind`/`unbind`). Between turns nothing is bound and stray agent output is dropped — there is no caller to route it to, and a permission request in that window is refused rather than auto-approved.
+- Each `_Agent` holds a lock for the whole turn, *including while parked on a permission*, because one ACP connection carries one conversation.
+- The pool is bounded (`_MAX_AGENTS`) and evicts the least recently used **idle** agent. A busy one is never evicted, so the pool overshoots rather than killing a running task's agent.
+- Any exception during a turn marks the agent `broken`; the next `_acquire` replaces it instead of resuming on a connection of unknown state.
 
 ### Continuity and lifecycle (`executor.py`)
 
@@ -80,7 +99,7 @@ The server does **not** load the developer's personal Claude settings (`setting_
 ## Conventions
 
 - **Keep the layering intact.** If you reach for `acp`/`claude_agent_sdk` outside their own backend module, or for `a2a.*` inside a backend, that's the wrong layer.
-- **The translation functions are pure and side-effect free** — `events_from_message` (claude), `events_from_update` + `select_option` (acp), and `diff.py` — so the protocol mapping is unit-testable without a live agent. Keep them that way; stateful concerns (cost capture, permission parking) live in the backend's `Client`/`drive`, not the translator.
+- **The translation functions are pure and side-effect free** — `events_from_message` (claude), `events_from_update` + `select_option` + `prompt_blocks` (acp), `diff.py`, and `attach.py` — so the protocol mapping is unit-testable without a live agent. Keep them that way; stateful concerns (cost capture, permission parking, the agent pool) live in the backend's `Client`/`drive`, not the translator.
 - Python 3.13+, full type hints, `from __future__ import annotations`. Ruff enforces `E, F, I, UP, B, SIM` at line length 88.
 - The `acp` and `claude` backends are imported lazily (`make_backend`) so `echo` works without their runtime deps. The Claude SDK is an optional extra (`a2acode[claude]`). New optional backends should follow the same lazy pattern.
 
