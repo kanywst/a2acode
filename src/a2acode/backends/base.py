@@ -82,6 +82,19 @@ class Plan:
 
 
 @dataclass(slots=True)
+class Notice:
+    """A note about the run itself rather than about the agent's work.
+
+    Emitted when the server cannot do exactly what the caller asked and has to
+    carry on differently — a resume the agent cannot honour, say. The caller
+    learns it from the task stream instead of silently receiving an answer
+    produced under different conditions than it expects.
+    """
+
+    text: str
+
+
+@dataclass(slots=True)
 class PermissionRequest:
     """A tool needs the caller's approval before it can run."""
 
@@ -111,7 +124,14 @@ class Result:
 
 
 BackendEvent = (
-    TextDelta | ToolUse | ToolResult | FileChange | Plan | PermissionRequest | Result
+    TextDelta
+    | ToolUse
+    | ToolResult
+    | FileChange
+    | Plan
+    | Notice
+    | PermissionRequest
+    | Result
 )
 
 

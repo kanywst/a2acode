@@ -7,6 +7,7 @@ Translates a backend's normalized event stream into A2A task lifecycle events:
     tool result         -> a working-state status update carrying the outcome
     file change         -> a named artifact carrying the diff
     plan                -> a "plan" artifact, replaced on every update
+    notice              -> a working-state status update about the run itself
     permission request  -> an input-required pause the caller answers
     result              -> run metadata on the completion message + continuity
 
@@ -31,6 +32,7 @@ from a2a.types import Part, Task, TaskState, TaskStatus
 from .backends.base import (
     Backend,
     FileChange,
+    Notice,
     PermissionDecision,
     PermissionRequest,
     Plan,
@@ -267,6 +269,11 @@ class ClaudeCodeExecutor(AgentExecutor):
                     await updater.add_artifact(
                         [Part(text=event.diff, media_type="text/x-diff")],
                         name=event.path,
+                    )
+                elif isinstance(event, Notice):
+                    await updater.update_status(
+                        TaskState.TASK_STATE_WORKING,
+                        message=updater.new_agent_message([Part(text=event.text)]),
                     )
                 elif isinstance(event, Plan):
                     if event.steps:

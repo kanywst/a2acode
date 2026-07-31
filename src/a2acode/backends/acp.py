@@ -40,6 +40,7 @@ from acp import schema as s
 from .base import (
     BackendEvent,
     FileChange,
+    Notice,
     Plan,
     PlanStep,
     Result,
@@ -335,7 +336,7 @@ class ACPBackend:
                     )
                 ),
             )
-            session_id = await self._open_session(conn, init, request)
+            session_id = await self._open_session(conn, init, request, session)
             response = await conn.prompt(
                 prompt=[text_block(request.prompt)], session_id=session_id
             )
@@ -350,16 +351,30 @@ class ACPBackend:
             )
 
     async def _open_session(
-        self, conn: Any, init: s.InitializeResponse, request: RunRequest
+        self,
+        conn: Any,
+        init: s.InitializeResponse,
+        request: RunRequest,
+        session: BackendSession,
     ) -> str:
-        can_load = bool(getattr(init.agent_capabilities, "load_session", False))
-        if request.resume and can_load:
-            await conn.load_session(
-                cwd=self.cwd, session_id=request.resume, mcp_servers=[]
+        if request.resume:
+            if getattr(init.agent_capabilities, "load_session", False):
+                await conn.load_session(
+                    cwd=self.cwd, session_id=request.resume, mcp_servers=[]
+                )
+                return request.resume
+            # Continuity was asked for and cannot be delivered. Say so: a caller
+            # that sent a follow-up turn would otherwise get a confident answer
+            # from an agent that has never seen the conversation it refers to.
+            await session.emit(
+                Notice(
+                    f"the {self.agent} agent does not support session/load, so "
+                    "this turn starts a fresh session; earlier turns in this "
+                    "context are not in its view"
+                )
             )
-            return request.resume
-        # No resume, or the agent can't reload a session: start fresh. The
-        # executor learns the new session id from the Result and maps the A2A
-        # context onto it for the next turn.
+        # No resume, or the agent can't reload one: start fresh. The executor
+        # learns the new session id from the Result and maps the A2A context
+        # onto it for the next turn.
         response = await conn.new_session(cwd=self.cwd, mcp_servers=[])
         return response.session_id

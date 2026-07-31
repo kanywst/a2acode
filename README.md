@@ -91,6 +91,8 @@ Continue the same conversation by passing the `context` from a previous turn:
 uv run a2acode call "now add a test for it" --context <context-id>
 ```
 
+Continuity needs the agent to support ACP's `session/load`. When it does not, the turn still runs, but on a fresh session — and the task says so in a status update rather than answering as if it remembered.
+
 ## Commands
 
 | Command              | Description                                  |

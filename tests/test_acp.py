@@ -19,14 +19,17 @@ from acp import (
 from acp import schema as s
 
 from a2acode.backends.acp import (
+    ACPBackend,
     _BridgeClient,
     events_from_update,
     select_option,
 )
 from a2acode.backends.base import (
     FileChange,
+    Notice,
     PermissionDecision,
     Plan,
+    RunRequest,
     TextDelta,
     ToolResult,
     ToolUse,
@@ -322,6 +325,75 @@ async def test_read_with_line_and_limit(tmp_path):
     # A negative limit must not slice from the end; it yields nothing.
     resp = await client.read_text_file("sess", str(target), line=1, limit=-1)
     assert resp.content == ""
+
+
+class _FakeConn:
+    """Records the session-lifecycle calls the backend makes."""
+
+    def __init__(self) -> None:
+        self.loaded: str | None = None
+        self.opened = False
+
+    async def load_session(self, *, cwd, session_id, mcp_servers):
+        self.loaded = session_id
+
+    async def new_session(self, *, cwd, mcp_servers):
+        self.opened = True
+        return s.NewSessionResponse(session_id="fresh")
+
+
+def _init(*, load_session: bool) -> s.InitializeResponse:
+    return s.InitializeResponse(
+        protocol_version=1,
+        agent_capabilities=s.AgentCapabilities(load_session=load_session),
+    )
+
+
+async def _open(conn, init, resume) -> tuple[str, list]:
+    """Open a session against a fake connection, collecting emitted events."""
+    events: list = []
+
+    class _Collector:
+        async def emit(self, event):
+            events.append(event)
+
+    session_id = await ACPBackend(agent="gemini")._open_session(
+        conn, init, RunRequest(prompt="hi", resume=resume), _Collector()
+    )
+    return session_id, events
+
+
+@pytest.mark.asyncio
+async def test_resume_loads_the_session_when_the_agent_supports_it():
+    conn = _FakeConn()
+    session_id, events = await _open(conn, _init(load_session=True), "sess-1")
+
+    assert session_id == "sess-1"
+    assert conn.loaded == "sess-1"
+    assert not conn.opened
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_resume_without_load_support_notices_the_lost_continuity():
+    conn = _FakeConn()
+    session_id, events = await _open(conn, _init(load_session=False), "sess-1")
+
+    assert session_id == "fresh"
+    assert conn.opened
+    assert len(events) == 1
+    assert isinstance(events[0], Notice)
+    assert "gemini" in events[0].text
+    assert "session/load" in events[0].text
+
+
+@pytest.mark.asyncio
+async def test_a_first_turn_opens_a_session_without_a_notice():
+    conn = _FakeConn()
+    session_id, events = await _open(conn, _init(load_session=False), None)
+
+    assert session_id == "fresh"
+    assert events == []
 
 
 @pytest.mark.asyncio

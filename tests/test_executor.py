@@ -5,6 +5,7 @@ from __future__ import annotations
 from a2acode import executor as executor_mod
 from a2acode.backends import (
     BackendSession,
+    Notice,
     Plan,
     PlanStep,
     RunRequest,
@@ -186,6 +187,11 @@ async def test_pump_replaces_the_plan_artifact_on_every_update():
     assert updater.artifacts[1][1] == "- [x] step one\n- [ ] (high) step two\n"
     # One artifact id across updates, so the caller replaces rather than stacks.
     assert len({a for a in updater.artifact_ids if a}) == 1
+
+
+async def test_pump_relays_a_notice_as_a_status_update():
+    updater = await _pump_events(Notice(text="starting a fresh session"))
+    assert updater.status_lines == ["starting a fresh session"]
 
 
 async def test_pump_skips_an_empty_plan():
