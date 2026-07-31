@@ -9,6 +9,7 @@ verified without a live Claude session.
 
 from __future__ import annotations
 
+from .attach import append_to_prompt
 from .base import Result, RunRequest, TextDelta, ToolResult, ToolUse
 from .session import BackendSession
 
@@ -17,17 +18,20 @@ class EchoBackend:
     name = "echo"
 
     async def drive(self, session: BackendSession, request: RunRequest) -> None:
+        # Attachments are folded in exactly as a real backend does, so the
+        # offline path exercises that rendering too.
+        prompt = append_to_prompt(request.prompt, request.attachments)
         await session.emit(
             ToolUse(
                 name="Echo",
-                tool_input={"prompt": request.prompt},
+                tool_input={"prompt": prompt},
                 tool_use_id="echo-1",
             )
         )
 
-        if "sudo" in request.prompt.lower():
+        if "sudo" in prompt.lower():
             decision = await session.request_permission(
-                "Bash", {"command": request.prompt}, f"$ {request.prompt}"
+                "Bash", {"command": prompt}, f"$ {prompt}"
             )
             if not decision.allow:
                 await session.emit(
@@ -43,7 +47,7 @@ class EchoBackend:
                 return
 
         await session.emit(ToolResult(tool_use_id="echo-1", name="Echo"))
-        for word in request.prompt.split():
+        for word in prompt.split():
             await session.emit(TextDelta(word + " "))
         await session.emit(self._result(request))
 

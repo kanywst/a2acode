@@ -194,6 +194,23 @@ def test_acp_falls_back_to_a_label_when_the_agent_cannot_read_images():
     assert "binary, not inlined" in blocks[0].text
 
 
+async def test_echo_renders_attachments_so_the_offline_path_covers_them():
+    from a2acode.backends import BackendSession, TextDelta, make_backend
+
+    session = BackendSession()
+    request = RunRequest(
+        prompt="review",
+        attachments=[Attachment(name="a.py", media_type="text/x-python", text="x = 1")],
+    )
+    session.start(lambda s: make_backend("echo").drive(s, request))
+    events = [e async for e in session.drain()]
+    await session.close()
+
+    text = "".join(e.text for e in events if isinstance(e, TextDelta))
+    assert "a.py" in text
+    assert "x = 1" in text
+
+
 def test_acp_inlines_text_attachments_regardless_of_capabilities():
     from a2acode.backends.acp import prompt_blocks
 
