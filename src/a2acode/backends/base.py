@@ -173,3 +173,17 @@ class Backend(Protocol):
     async def drive(self, session: BackendSession, request: RunRequest) -> None:
         """Run one turn, emitting events onto ``session`` until it returns."""
         ...
+
+
+@runtime_checkable
+class ClosableBackend(Protocol):
+    """A backend holding resources that outlive a single run.
+
+    Kept separate from ``Backend`` so the base protocol stays "anything with a
+    name and a drive"; only a backend that pools something — the ACP backend's
+    agent subprocesses — needs to be shut down with the server.
+    """
+
+    async def aclose(self) -> None:
+        """Release everything held across runs."""
+        ...

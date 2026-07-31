@@ -111,7 +111,7 @@ An A2A message is not only text. A caller can attach the failing log, the patch 
 
 A backend turns a prompt into a stream of normalized events. Three ship today:
 
-- `acp` (default): drives any agent that speaks Zed's Agent Client Protocol as a subprocess. `--agent claude|gemini|codex` selects a launch preset; `--agent-command` drives any other ACP agent. This is the vendor-neutral path.
+- `acp` (default): drives any agent that speaks Zed's Agent Client Protocol as a subprocess. `--agent claude|gemini|codex` selects a launch preset; `--agent-command` drives any other ACP agent. This is the vendor-neutral path. The subprocess is kept alive per conversation, so a follow-up turn skips the process launch, the ACP handshake, and the session reload and talks straight to the agent that already holds the conversation.
 - `claude`: drives Claude Code directly through the Claude Agent SDK, no subprocess. Install with `uv sync --extra claude`. Use it when you want the SDK-native path (e.g. `--max-budget-usd`) rather than ACP.
 - `echo`: no dependencies, mirrors the input. For wiring checks and tests.
 

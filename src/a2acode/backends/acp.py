@@ -23,16 +23,25 @@ parked-across-two-execute-calls behavior the Claude backend gets through
 ``can_use_tool``. Cancellation runs the same seam in reverse: the session's
 canceller sends ``session/cancel`` so the agent ends the turn itself.
 
-``events_from_update`` and ``select_option`` are pure and side-effect free so the
-protocol translation is unit-testable without launching an agent subprocess.
+An agent subprocess is kept alive per A2A context rather than per turn. Spawning
+one costs a process launch (``npx ...``) plus an ACP handshake plus a
+``session/load``, all of which a follow-up turn in the same conversation can
+skip entirely by talking to the process that already holds it.
+
+``events_from_update``, ``select_option``, and ``prompt_blocks`` are pure and
+side-effect free so the protocol translation is unit-testable without launching
+an agent subprocess.
 """
 
 from __future__ import annotations
 
 import asyncio
 import base64
+import logging
 import os
 from collections.abc import Iterator, Mapping, Sequence
+from contextlib import AsyncExitStack, suppress
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -62,9 +71,16 @@ from .base import (
 from .diff import unified_diff
 from .session import BackendSession
 
+logger = logging.getLogger(__name__)
+
 # Tool output is relayed as a short excerpt: it arrives on every status update
 # and can be arbitrarily large (a whole test run, a file dump).
 _MAX_TOOL_OUTPUT = 2000
+
+# How many agent subprocesses to keep alive across turns. Each is a real
+# process holding a real conversation, so this bounds memory and file handles
+# the way the executor's own maps bound sessions.
+_MAX_AGENTS = 32
 
 # How to launch each known ACP agent adapter as a subprocess. A preset is just a
 # default command; pass an explicit ``command``/``args`` to drive any other ACP
@@ -232,15 +248,28 @@ class _BridgeClient(Client):
     connection's reader task; this translates each onto the session queue, and
     parks a permission request on ``session.request_permission`` until the A2A
     caller answers.
+
+    One client serves a connection for as long as that connection lives, which
+    outlasts any single turn, so the session it forwards to is rebound per turn
+    with ``bind``. Between turns nothing is bound and stray output is dropped:
+    there is no caller to route it to.
     """
 
-    def __init__(self, session: BackendSession, cwd: str = ".") -> None:
+    def __init__(self, session: BackendSession | None = None, cwd: str = ".") -> None:
         self._session = session
         # Resolved workspace root: every fs read/write is confined under it so a
         # buggy or hostile agent can't reach arbitrary files via the capability
         # we advertise. ACP paths are absolute, but we still contain them.
         self._cwd = Path(cwd).resolve()
         self.cost_usd: float | None = None
+
+    def bind(self, session: BackendSession) -> None:
+        """Route this connection's output to ``session`` for one turn."""
+        self._session = session
+        self.cost_usd = None
+
+    def unbind(self) -> None:
+        self._session = None
 
     def _safe_path(self, path: str) -> Path:
         target = Path(path)
@@ -252,6 +281,8 @@ class _BridgeClient(Client):
         return target
 
     async def session_update(self, session_id: str, update: Any, **_: Any) -> None:
+        if self._session is None:
+            return
         if isinstance(update, s.UsageUpdate) and update.cost is not None:
             self.cost_usd = update.cost.amount
         for event in events_from_update(update):
@@ -264,6 +295,13 @@ class _BridgeClient(Client):
         options: list[s.PermissionOption],
         **_: Any,
     ) -> s.RequestPermissionResponse:
+        if self._session is None:
+            # No turn in flight, so there is no caller who could answer. Refusing
+            # is the only safe reply; approving would run a tool nobody asked
+            # for and nobody is watching.
+            return s.RequestPermissionResponse(
+                outcome=s.DeniedOutcome(outcome="cancelled")
+            )
         name = tool_call.title or (tool_call.kind or "tool")
         decision = await self._session.request_permission(
             name, _as_dict(tool_call.raw_input), name
@@ -330,6 +368,34 @@ class _BridgeClient(Client):
         return None
 
 
+@dataclass
+class _Agent:
+    """One live agent subprocess and the ACP connection to it."""
+
+    stack: AsyncExitStack
+    conn: Any
+    process: Any
+    client: _BridgeClient
+    capabilities: s.AgentCapabilities | None
+    session_id: str | None = None
+    pooled: bool = True
+    broken: bool = False
+    # Held for the whole of a turn, including while it is parked on a permission
+    # request: one ACP connection carries one conversation.
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    @property
+    def usable(self) -> bool:
+        return not self.broken and self.process.returncode is None
+
+
+async def _close_agent(agent: _Agent) -> None:
+    # Shutdown races a subprocess that may already be gone; the pool must not
+    # fail a turn (or a server shutdown) over how an agent chose to exit.
+    with suppress(Exception):
+        await agent.stack.aclose()
+
+
 class ACPBackend:
     name = "acp"
 
@@ -360,16 +426,115 @@ class ACPBackend:
         # still inherits PATH and any provider credentials (ANTHROPIC_API_KEY,
         # GEMINI_API_KEY, ...) it needs to authenticate.
         self.env = {**os.environ, **(env or {})}
+        # context_id -> the agent process serving it, so a follow-up turn does
+        # not pay to launch (and re-load a session into) a fresh subprocess.
+        self._agents: dict[str, _Agent] = {}
+        # Serializes pool lookup, eviction, and spawning, so two concurrent
+        # first turns in one context cannot each launch their own process.
+        self._pool_lock = asyncio.Lock()
 
     async def drive(self, session: BackendSession, request: RunRequest) -> None:
+        agent = await self._acquire(request.context_id)
+        # One turn at a time per agent: the connection carries a single
+        # conversation, and a turn parked on a permission still owns it.
+        async with agent.lock:
+            agent.client.bind(session)
+            try:
+                await self._run_turn(agent, session, request)
+            except BaseException:
+                # The connection is mid-turn and its state is now unknown - a
+                # cancelled prompt, a dead subprocess. Retire it rather than
+                # handing it to the next turn in this context.
+                agent.broken = True
+                raise
+            finally:
+                agent.client.unbind()
+                if not agent.pooled or agent.broken:
+                    await _close_agent(agent)
+
+    async def aclose(self) -> None:
+        """Shut down every pooled agent process."""
+        async with self._pool_lock:
+            agents = list(self._agents.values())
+            self._agents.clear()
+        for agent in agents:
+            await _close_agent(agent)
+
+    async def _run_turn(
+        self, agent: _Agent, session: BackendSession, request: RunRequest
+    ) -> None:
+        session_id = await self._open_session(agent, request, session)
+        # An A2A cancel reaches the agent as session/cancel, which ends the turn
+        # cleanly, instead of only killing its process from under whatever tool
+        # was mid-flight.
+        session.set_canceller(lambda: agent.conn.cancel(session_id=session_id))
+        response = await agent.conn.prompt(
+            prompt=prompt_blocks(request, agent.capabilities),
+            session_id=session_id,
+        )
+        usage = response.usage.model_dump() if response.usage else None
+        await session.emit(
+            Result(
+                session_id=session_id,
+                cost_usd=agent.client.cost_usd,
+                num_turns=None,
+                usage=usage,
+            )
+        )
+
+    async def _acquire(self, context_id: str | None) -> _Agent:
+        """Return the agent process for a context, launching one if needed."""
+        if context_id is None:
+            # No context to pool under (a backend driven directly rather than
+            # through the executor): one process for this turn only.
+            agent = await self._spawn()
+            agent.pooled = False
+            return agent
+        async with self._pool_lock:
+            existing = self._agents.pop(context_id, None)
+            if existing is not None:
+                if existing.usable:
+                    # Re-insert so the most recently used context is last, which
+                    # makes eviction least-recently-used.
+                    self._agents[context_id] = existing
+                    return existing
+                await _close_agent(existing)
+            await self._evict_if_full()
+            agent = await self._spawn()
+            self._agents[context_id] = agent
+            return agent
+
+    async def _evict_if_full(self) -> None:
+        """Close idle agents until there is room for one more.
+
+        Only an idle agent can go: evicting one mid-turn would kill a running
+        task's agent out from under it. When every agent is busy the pool is
+        allowed to overshoot, bounded by how many turns can run at once.
+        """
+        while len(self._agents) >= _MAX_AGENTS:
+            victim = next(
+                (key for key, a in self._agents.items() if not a.lock.locked()), None
+            )
+            if victim is None:
+                logger.warning("ACP agent pool at capacity with every agent busy")
+                return
+            logger.info("closing idle ACP agent for context %s", victim)
+            await _close_agent(self._agents.pop(victim))
+
+    async def _spawn(self) -> _Agent:
+        """Launch an agent subprocess and complete the ACP handshake."""
         # The ACP Client base declares terminal/* and ext_* with empty bodies as
         # optional overrides; we advertise no terminal capability, so the agent
         # never calls them. mypy reads the empty bodies as abstract, hence the
         # scoped ignore.
-        client = _BridgeClient(session, self.cwd)  # type: ignore[abstract]
-        async with spawn_agent_process(
-            client, self.command, *self.args, env=self.env, cwd=self.cwd
-        ) as (conn, _process):
+        client = _BridgeClient(cwd=self.cwd)  # type: ignore[abstract]
+        stack = AsyncExitStack()
+        try:
+            conn, process = await stack.enter_async_context(
+                spawn_agent_process(
+                    client, self.command, *self.args, env=self.env, cwd=self.cwd
+                )
+            )
             init = await conn.initialize(
                 protocol_version=PROTOCOL_VERSION,
                 client_capabilities=s.ClientCapabilities(
@@ -378,37 +543,30 @@ class ACPBackend:
                     )
                 ),
             )
-            session_id = await self._open_session(conn, init, request, session)
-            # An A2A cancel now reaches the agent as session/cancel, which ends
-            # the turn cleanly, instead of only killing its process from under
-            # whatever tool was mid-flight.
-            session.set_canceller(lambda: conn.cancel(session_id=session_id))
-            response = await conn.prompt(
-                prompt=prompt_blocks(request, init.agent_capabilities),
-                session_id=session_id,
-            )
-            usage = response.usage.model_dump() if response.usage else None
-            await session.emit(
-                Result(
-                    session_id=session_id,
-                    cost_usd=client.cost_usd,
-                    num_turns=None,
-                    usage=usage,
-                )
-            )
+        except BaseException:
+            await stack.aclose()
+            raise
+        return _Agent(
+            stack=stack,
+            conn=conn,
+            process=process,
+            client=client,
+            capabilities=init.agent_capabilities,
+        )
 
     async def _open_session(
-        self,
-        conn: Any,
-        init: s.InitializeResponse,
-        request: RunRequest,
-        session: BackendSession,
+        self, agent: _Agent, request: RunRequest, session: BackendSession
     ) -> str:
+        if agent.session_id is not None and request.resume in (None, agent.session_id):
+            # This process already holds the conversation: no session/load, and
+            # no new session id for the executor to remap.
+            return agent.session_id
         if request.resume:
-            if getattr(init.agent_capabilities, "load_session", False):
-                await conn.load_session(
+            if getattr(agent.capabilities, "load_session", False):
+                await agent.conn.load_session(
                     cwd=self.cwd, session_id=request.resume, mcp_servers=[]
                 )
+                agent.session_id = request.resume
                 return request.resume
             # Continuity was asked for and cannot be delivered. Say so: a caller
             # that sent a follow-up turn would otherwise get a confident answer
@@ -423,5 +581,6 @@ class ACPBackend:
         # No resume, or the agent can't reload one: start fresh. The executor
         # learns the new session id from the Result and maps the A2A context
         # onto it for the next turn.
-        response = await conn.new_session(cwd=self.cwd, mcp_servers=[])
+        response = await agent.conn.new_session(cwd=self.cwd, mcp_servers=[])
+        agent.session_id = response.session_id
         return response.session_id
