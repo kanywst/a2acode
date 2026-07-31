@@ -6,10 +6,20 @@ from claude_agent_sdk import (
     AssistantMessage,
     ResultMessage,
     TextBlock,
+    ToolResultBlock,
     ToolUseBlock,
+    UserMessage,
 )
 
-from a2acode.backends.base import FileChange, Result, RunRequest, TextDelta, ToolUse
+from a2acode.backends.base import (
+    FileChange,
+    Plan,
+    Result,
+    RunRequest,
+    TextDelta,
+    ToolResult,
+    ToolUse,
+)
 from a2acode.backends.claude import ClaudeBackend, events_from_message
 
 
@@ -56,6 +66,84 @@ def test_events_from_result_message():
     assert result.session_id == "s1"
     assert result.cost_usd == 0.0123
     assert result.num_turns == 2
+
+
+def test_tool_result_block_maps_to_tool_result():
+    message = UserMessage(
+        content=[ToolResultBlock(tool_use_id="t1", content="a.py\nb.py\n")]
+    )
+    events = list(events_from_message(message))
+
+    assert len(events) == 1
+    result = events[0]
+    assert isinstance(result, ToolResult)
+    assert result.tool_use_id == "t1"
+    assert not result.failed
+    assert result.output == "a.py\nb.py\n"
+
+
+def test_errored_tool_result_is_flagged_and_block_content_is_joined():
+    message = UserMessage(
+        content=[
+            ToolResultBlock(
+                tool_use_id="t1",
+                content=[{"type": "text", "text": "boom"}, {"type": "image"}],
+                is_error=True,
+            )
+        ]
+    )
+    result = next(iter(events_from_message(message)))
+
+    assert result.failed
+    # The image block carries no text, so it is skipped rather than stringified.
+    assert result.output == "boom"
+
+
+def test_todowrite_yields_a_plan_alongside_the_tool_use():
+    message = AssistantMessage(
+        content=[
+            ToolUseBlock(
+                id="t1",
+                name="TodoWrite",
+                input={
+                    "todos": [
+                        {"content": "read the code", "status": "completed"},
+                        {"content": "write the fix", "status": "in_progress"},
+                    ]
+                },
+            )
+        ],
+        model="claude-test",
+    )
+    events = list(events_from_message(message))
+
+    assert [type(e) for e in events] == [ToolUse, Plan]
+    assert [(s.content, s.status) for s in events[1].steps] == [
+        ("read the code", "completed"),
+        ("write the fix", "in_progress"),
+    ]
+
+
+def test_malformed_todos_do_not_raise():
+    for todos in ("oops", [1, "x"], []):
+        message = AssistantMessage(
+            content=[ToolUseBlock(id="t1", name="TodoWrite", input={"todos": todos})],
+            model="claude-test",
+        )
+        assert [type(e) for e in events_from_message(message)] == [ToolUse]
+
+
+def test_plain_text_user_message_yields_nothing():
+    assert list(events_from_message(UserMessage(content="just text"))) == []
+
+
+def test_tool_result_output_is_capped():
+    message = UserMessage(
+        content=[ToolResultBlock(tool_use_id="t1", content="x" * 5000)]
+    )
+    output = next(iter(events_from_message(message))).output
+    assert output.endswith(" …")
+    assert len(output) == 2002
 
 
 def test_empty_text_block_is_skipped():

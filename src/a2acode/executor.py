@@ -4,7 +4,10 @@ Translates a backend's normalized event stream into A2A task lifecycle events:
 
     text                -> a streamed artifact (append / last_chunk)
     tool use            -> a working-state status update describing the action
+    tool result         -> a working-state status update carrying the outcome
     file change         -> a named artifact carrying the diff
+    plan                -> a "plan" artifact, replaced on every update
+    notice              -> a working-state status update about the run itself
     permission request  -> an input-required pause the caller answers
     result              -> run metadata on the completion message + continuity
 
@@ -25,15 +28,20 @@ from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.server.tasks import TaskUpdater
 from a2a.types import Part, Task, TaskState, TaskStatus
+from google.protobuf import json_format
 
 from .backends.base import (
+    Attachment,
     Backend,
     FileChange,
+    Notice,
     PermissionDecision,
     PermissionRequest,
+    Plan,
     Result,
     RunRequest,
     TextDelta,
+    ToolResult,
     ToolUse,
 )
 from .backends.session import BackendSession
@@ -51,6 +59,31 @@ _ALLOW_WORDS = {"allow", "yes", "y", "approve", "ok", "accept", "grant"}
 _MAX_CONTEXTS = 4096
 _MAX_LIVE = 256
 
+# Checklist markers for a plan step's status; anything else renders as open.
+_PLAN_MARKS = {"completed": "x", "in_progress": ">"}
+
+# Caps on what a caller can attach to one turn. Text is inlined into the
+# prompt, so it competes with the work for the context window; binary travels
+# as its own content block and gets the headroom a screenshot needs.
+_MAX_TEXT_ATTACHED = 64 * 1024
+_MAX_TEXT_TOTAL = 256 * 1024
+_MAX_BINARY_ATTACHED = 4 * 1024 * 1024
+_MAX_BINARY_TOTAL = 8 * 1024 * 1024
+
+# Media types that are text despite not being under text/*.
+_TEXTUAL_TYPES = {
+    "application/json",
+    "application/x-ndjson",
+    "application/xml",
+    "application/yaml",
+    "application/x-yaml",
+    "application/javascript",
+    "application/x-sh",
+    "application/sql",
+    "application/x-patch",
+    "application/toml",
+}
+
 
 @dataclass
 class _Stream:
@@ -61,41 +94,109 @@ class _Stream:
     pending: str | None = None
     sent_first: bool = False
     metadata: dict[str, object] = field(default_factory=dict)
+    # tool_use_id -> name, for a ToolResult that omits the title.
+    tool_names: dict[str, str] = field(default_factory=dict)
+    # Reused so each plan update replaces the last instead of stacking a copy.
+    plan_artifact_id: str = ""
 
 
-def _build_prompt(context: RequestContext) -> str:
-    """Assemble the prompt from every part of the incoming message.
+def _is_textual(media_type: str) -> bool:
+    return media_type.startswith("text/") or media_type in _TEXTUAL_TYPES
 
-    Text parts are concatenated; file, URL, and structured-data parts are
-    surfaced to Claude as labelled references so an attachment is not silently
-    dropped on the floor.
+
+def _build_input(context: RequestContext) -> tuple[str, list[Attachment]]:
+    """Split the incoming message into prompt text and attachments.
+
+    A caller sending a log, a patch, or a screenshot gets it read, rather than
+    reduced to a note that something was attached.
     """
     message = getattr(context, "message", None)
     parts = getattr(message, "parts", None) if message is not None else None
     if not parts:
-        return context.get_user_input() or ""
+        return context.get_user_input() or "", []
 
     texts: list[str] = []
-    refs: list[str] = []
+    attachments: list[Attachment] = []
+    budget = _Budget(text=_MAX_TEXT_TOTAL, binary=_MAX_BINARY_TOTAL)
     for part in parts:
         which = part.WhichOneof("content")
         if which == "text":
             if part.text:
                 texts.append(part.text)
-        elif which == "url":
-            label = part.filename or part.url
-            refs.append(f"[attached {label} ({part.media_type or 'file'}): {part.url}]")
-        elif which == "raw":
-            name = part.filename or "unnamed"
-            kind = part.media_type or "application/octet-stream"
-            refs.append(f"[attached file {name} ({kind}, {len(part.raw)} bytes)]")
+            continue
+        if which == "url":
+            attachments.append(
+                Attachment(
+                    name=part.filename or part.url,
+                    media_type=part.media_type or "",
+                    uri=part.url,
+                )
+            )
+            continue
+        if which == "raw":
+            attachment = _from_raw(part)
         elif which == "data":
-            refs.append(f"[attached data ({part.media_type or 'application/json'})]")
+            attachment = _from_data(part)
+        else:
+            continue
+        budget.fit(attachment)
+        attachments.append(attachment)
 
-    prompt = "\n".join(texts)
-    if refs:
-        prompt = f"{prompt}\n\n" + "\n".join(refs)
-    return prompt.strip()
+    return "\n".join(texts).strip(), attachments
+
+
+def _from_raw(part: Part) -> Attachment:
+    """An inline file part: decoded when it is text, kept as bytes otherwise."""
+    media_type = part.media_type or "application/octet-stream"
+    text: str | None = None
+    if _is_textual(media_type):
+        try:
+            text = part.raw.decode("utf-8")
+        except UnicodeDecodeError:
+            # Declared as text but is not: treat it as the bytes it actually is
+            # rather than handing the agent replacement characters.
+            text = None
+    return Attachment(
+        name=part.filename or "unnamed",
+        media_type=media_type,
+        text=text,
+        data=None if text is not None else bytes(part.raw),
+    )
+
+
+def _from_data(part: Part) -> Attachment:
+    """A structured-data part, rendered as the JSON the caller meant it to be."""
+    return Attachment(
+        name=part.filename or "data",
+        media_type=part.media_type or "application/json",
+        text=json_format.MessageToJson(part.data),
+    )
+
+
+@dataclass
+class _Budget:
+    """What is left of a message's attachment allowance."""
+
+    text: int
+    binary: int
+
+    def fit(self, attachment: Attachment) -> None:
+        """Trim an attachment to what remains, recording that it was trimmed."""
+        if attachment.text is not None:
+            cap = min(self.text, _MAX_TEXT_ATTACHED)
+            if len(attachment.text) > cap:
+                attachment.text = attachment.text[:cap]
+                attachment.truncated = True
+            self.text -= len(attachment.text)
+        elif attachment.data is not None:
+            cap = min(self.binary, _MAX_BINARY_ATTACHED)
+            if len(attachment.data) > cap:
+                # Bytes cannot be usefully cut in half, so an oversized one is
+                # dropped whole and rendered as a note that it was.
+                attachment.data = None
+                attachment.truncated = True
+            else:
+                self.binary -= len(attachment.data)
 
 
 def _describe_tool(event: ToolUse) -> str:
@@ -107,6 +208,32 @@ def _describe_tool(event: ToolUse) -> str:
     if path:
         return f"{event.name} {path}"
     return event.name
+
+
+def _describe_result(event: ToolResult, name: str) -> str:
+    """A short line for a tool's outcome.
+
+    Successful output is left out as noise; a failure carries its first line,
+    which is the part that explains it.
+    """
+    if not event.failed:
+        return f"✓ {name}"
+    reason = event.output.strip().splitlines()[0][:200] if event.output.strip() else ""
+    return f"✗ {name}: {reason}" if reason else f"✗ {name}"
+
+
+def _render_plan(plan: Plan) -> str:
+    """Render a plan as a markdown checklist.
+
+    ``in_progress`` gets its own marker: which step the agent is on is the
+    reason to watch a plan at all.
+    """
+    lines = []
+    for step in plan.steps:
+        mark = _PLAN_MARKS.get(step.status, " ")
+        prefix = "(high) " if step.priority == "high" else ""
+        lines.append(f"- [{mark}] {prefix}{step.content}")
+    return "\n".join(lines) + "\n" if lines else ""
 
 
 class ClaudeCodeExecutor(AgentExecutor):
@@ -153,10 +280,12 @@ class ClaudeCodeExecutor(AgentExecutor):
                 )
             )
             await updater.start_work()
+            prompt, attachments = _build_input(context)
             request = RunRequest(
-                prompt=_build_prompt(context),
+                prompt=prompt,
                 context_id=context_id,
                 resume=self._session_ids.get(context_id),
+                attachments=attachments,
             )
             async with self._admit_lock:
                 await self._evict_if_full()
@@ -206,10 +335,21 @@ class ClaudeCodeExecutor(AgentExecutor):
                         await flush(stream.pending, last=False)
                     stream.pending = event.text
                 elif isinstance(event, ToolUse):
+                    stream.tool_names[event.tool_use_id] = event.name
                     await updater.update_status(
                         TaskState.TASK_STATE_WORKING,
                         message=updater.new_agent_message(
                             [Part(text=_describe_tool(event))]
+                        ),
+                    )
+                elif isinstance(event, ToolResult):
+                    name = (
+                        event.name or stream.tool_names.get(event.tool_use_id) or "tool"
+                    )
+                    await updater.update_status(
+                        TaskState.TASK_STATE_WORKING,
+                        message=updater.new_agent_message(
+                            [Part(text=_describe_result(event, name))]
                         ),
                     )
                 elif isinstance(event, FileChange):
@@ -217,6 +357,29 @@ class ClaudeCodeExecutor(AgentExecutor):
                         [Part(text=event.diff, media_type="text/x-diff")],
                         name=event.path,
                     )
+                elif isinstance(event, Notice):
+                    await updater.update_status(
+                        TaskState.TASK_STATE_WORKING,
+                        message=updater.new_agent_message([Part(text=event.text)]),
+                    )
+                elif isinstance(event, Plan):
+                    # An emptied plan still replaces the artifact, or the caller
+                    # would keep seeing a checklist the agent has abandoned.
+                    if event.steps or stream.plan_artifact_id:
+                        if not stream.plan_artifact_id:
+                            stream.plan_artifact_id = uuid4().hex
+                        await updater.add_artifact(
+                            [
+                                Part(
+                                    text=_render_plan(event),
+                                    media_type="text/markdown",
+                                )
+                            ],
+                            artifact_id=stream.plan_artifact_id,
+                            name="plan",
+                            append=False,
+                            last_chunk=True,
+                        )
                 elif isinstance(event, PermissionRequest):
                     if stream.pending is not None:
                         stream.chunks.append(stream.pending)

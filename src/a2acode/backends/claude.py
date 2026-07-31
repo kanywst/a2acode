@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from typing import Any
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -30,12 +31,31 @@ from claude_agent_sdk import (
     ResultMessage,
     SettingSource,
     TextBlock,
+    ToolResultBlock,
     ToolUseBlock,
+    UserMessage,
 )
 
-from .base import BackendEvent, Result, RunRequest, TextDelta, ToolUse
+from .attach import append_to_prompt
+from .base import (
+    BackendEvent,
+    Plan,
+    PlanStep,
+    Result,
+    RunRequest,
+    TextDelta,
+    ToolResult,
+    ToolUse,
+)
 from .diff import file_changes
 from .session import BackendSession
+
+# Tool output is relayed as a short excerpt; a single result can be a whole test
+# run or file dump.
+_MAX_TOOL_OUTPUT = 2000
+
+# The tool whose input carries Claude's plan for the turn.
+_PLAN_TOOL = "TodoWrite"
 
 
 def events_from_message(message: object) -> Iterator[BackendEvent]:
@@ -53,6 +73,15 @@ def events_from_message(message: object) -> Iterator[BackendEvent]:
                 tool_input = dict(block.input or {})
                 yield ToolUse(block.name, tool_input, block.id)
                 yield from file_changes(block.name, tool_input)
+                if block.name == _PLAN_TOOL:
+                    yield from _plan_from_todos(tool_input)
+    elif isinstance(message, UserMessage):
+        # Tool results come back as a user message: this is where the run says
+        # whether the tool the caller just watched start actually succeeded.
+        if isinstance(message.content, list):
+            for block in message.content:
+                if isinstance(block, ToolResultBlock):
+                    yield _tool_result(block)
     elif isinstance(message, ResultMessage):
         yield Result(
             session_id=message.session_id,
@@ -60,6 +89,52 @@ def events_from_message(message: object) -> Iterator[BackendEvent]:
             num_turns=message.num_turns,
             usage=message.usage,
         )
+
+
+def _plan_from_todos(tool_input: dict[str, Any]) -> Iterator[Plan]:
+    """Derive the agent's plan from a TodoWrite call.
+
+    The Claude SDK has no plan message of its own; the todo list *is* the plan,
+    and it arrives as the input to a tool call. ACP models the same thing as a
+    first-class session update, so this is where the two backends converge on
+    one event.
+    """
+    todos = tool_input.get("todos")
+    if not isinstance(todos, list):
+        return
+    steps = [
+        PlanStep(
+            content=str(todo.get("content")),
+            status=str(todo.get("status") or "pending"),
+        )
+        for todo in todos
+        if isinstance(todo, dict) and todo.get("content")
+    ]
+    if steps:
+        yield Plan(steps=steps)
+
+
+def _tool_result(block: ToolResultBlock) -> ToolResult:
+    """Normalize one tool result.
+
+    The SDK's content is either a plain string or the raw block list the tool
+    returned; only the text of the latter is meaningful to a remote caller, so
+    non-text blocks are skipped rather than stringified.
+    """
+    content = block.content
+    if isinstance(content, list):
+        text = "\n".join(
+            str(item.get("text", ""))
+            for item in content
+            if isinstance(item, dict) and item.get("text")
+        )
+    else:
+        text = content or ""
+    if len(text) > _MAX_TOOL_OUTPUT:
+        text = text[:_MAX_TOOL_OUTPUT] + " …"
+    return ToolResult(
+        tool_use_id=block.tool_use_id, failed=bool(block.is_error), output=text
+    )
 
 
 class ClaudeBackend:
@@ -119,7 +194,7 @@ class ClaudeBackend:
 
         options = self._options(request, can_use_tool)
         async with ClaudeSDKClient(options=options) as client:
-            await client.query(request.prompt)
+            await client.query(append_to_prompt(request.prompt, request.attachments))
             async for message in client.receive_response():
                 for event in events_from_message(message):
                     await session.emit(event)

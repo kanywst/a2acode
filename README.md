@@ -15,14 +15,16 @@ Most adapters that put a coding agent behind A2A flatten everything to text in, 
 
 ## How it maps to A2A
 
-| The coding agent produces | A2A surface it lands on                            |
-| ------------------------- | -------------------------------------------------- |
-| Assistant text            | A streamed artifact (`append` / `last_chunk`)      |
-| A tool call (Bash, Edit)  | A `working` status update for the action           |
-| A file edit (diff)        | A named artifact carrying the diff                 |
-| A permission request      | An `input-required` pause the caller answers       |
-| Run result               | Cost, turns, and usage on the completion message   |
-| Session id                | Mapped to the A2A `contextId` so follow-ups resume |
+| The coding agent produces   | A2A surface it lands on                            |
+| --------------------------- | -------------------------------------------------- |
+| Assistant text              | A streamed artifact (`append` / `last_chunk`)      |
+| A tool call (Bash, Edit)    | A `working` status update for the action           |
+| That tool's outcome         | A `working` status update: `✓ Bash` / `✗ Bash: …`  |
+| Its plan for the turn       | A `plan` artifact, replaced as steps progress      |
+| A file edit (diff)          | A named artifact carrying the diff                 |
+| A permission request        | An `input-required` pause the caller answers       |
+| Run result                  | Cost, turns, and usage on the completion message   |
+| Session id                  | Mapped to the A2A `contextId` so follow-ups resume |
 
 The mapping is all in `executor.py`. Backends only emit normalized events; they never touch the protocol.
 
@@ -89,6 +91,8 @@ Continue the same conversation by passing the `context` from a previous turn:
 uv run a2acode call "now add a test for it" --context <context-id>
 ```
 
+Continuity needs the agent to support ACP's `session/load`. When it does not, the turn still runs, but on a fresh session — and the task says so in a status update rather than answering as if it remembered.
+
 ## Commands
 
 | Command              | Description                                  |
@@ -99,11 +103,15 @@ uv run a2acode call "now add a test for it" --context <context-id>
 
 The agent card is served at `/.well-known/agent-card.json` and advertises Claude Code's abilities as discrete skills (generation, refactor, debug, review, test, explain).
 
+## Attachments
+
+An A2A message is not only text. A caller can attach the failing log, the patch to review, or a screenshot, and the parts reach the agent as content rather than as a note that something was attached: text files are inlined into the prompt, images go to ACP agents that advertise image support as real image blocks, and URL parts arrive as links the agent can fetch. Inlined content is capped per part and per message, and anything trimmed is marked as truncated so the agent knows it is reading a fragment.
+
 ## Backends
 
 A backend turns a prompt into a stream of normalized events. Three ship today:
 
-- `acp` (default): drives any agent that speaks Zed's Agent Client Protocol as a subprocess. `--agent claude|gemini|codex` selects a launch preset; `--agent-command` drives any other ACP agent. This is the vendor-neutral path.
+- `acp` (default): drives any agent that speaks Zed's Agent Client Protocol as a subprocess. `--agent claude|gemini|codex` selects a launch preset; `--agent-command` drives any other ACP agent. This is the vendor-neutral path. The subprocess is kept alive per conversation, so a follow-up turn skips the process launch, the ACP handshake, and the session reload and talks straight to the agent that already holds the conversation.
 - `claude`: drives Claude Code directly through the Claude Agent SDK, no subprocess. Install with `uv sync --extra claude`. Use it when you want the SDK-native path (e.g. `--max-budget-usd`) rather than ACP.
 - `echo`: no dependencies, mirrors the input. For wiring checks and tests.
 
@@ -187,7 +195,7 @@ git push origin v0.1.0
 
 ## Status
 
-The mapping is complete end to end and verified against real Claude: text round trip, tool-progress updates, streaming artifacts, file diffs as artifacts, run metadata, session continuity, the permission-to-`input-required` round trip, and push notifications. The offline `echo` backend covers every path including permissions, so it can all be exercised without an API key.
+The mapping is complete end to end and verified against real Claude: text round trip, tool calls and their outcomes, the agent's plan, streaming artifacts, file diffs as artifacts, caller attachments, run metadata, session continuity, the permission-to-`input-required` round trip, and push notifications. The offline `echo` backend covers every path including permissions and attachments, so it can all be exercised without an API key.
 
 ## License
 

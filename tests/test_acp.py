@@ -7,21 +7,39 @@ permission round trip is driven against a fake session.
 
 from __future__ import annotations
 
-import pytest
-from acp import schema as s
-from acp import text_block, tool_diff_content
+import asyncio
+from contextlib import AsyncExitStack, suppress
 
+import pytest
+from acp import (
+    image_block,
+    plan_entry,
+    text_block,
+    tool_content,
+    tool_diff_content,
+    update_plan,
+)
+from acp import schema as s
+
+from a2acode.backends import acp as acp_mod
 from a2acode.backends.acp import (
+    ACPBackend,
+    _Agent,
     _BridgeClient,
     events_from_update,
     select_option,
 )
 from a2acode.backends.base import (
     FileChange,
+    Notice,
     PermissionDecision,
+    Plan,
+    RunRequest,
     TextDelta,
+    ToolResult,
     ToolUse,
 )
+from a2acode.backends.session import BackendSession
 
 
 def _opts() -> list[s.PermissionOption]:
@@ -81,6 +99,123 @@ def test_tool_call_progress_yields_only_filechange():
     assert isinstance(events[0], FileChange)
     assert "-x = 1" in events[0].diff
     assert "+y = 2" in events[0].diff
+
+
+def test_completed_tool_call_yields_tool_result_with_output():
+    update = s.ToolCallProgress(
+        session_update="tool_call_update",
+        tool_call_id="t1",
+        title="Run ls",
+        status="completed",
+        content=[tool_content(text_block("a.py\nb.py\n"))],
+    )
+    events = list(events_from_update(update))
+
+    assert len(events) == 1
+    result = events[0]
+    assert isinstance(result, ToolResult)
+    assert result.tool_use_id == "t1"
+    assert result.name == "Run ls"
+    assert not result.failed
+    assert result.output == "a.py\nb.py\n"
+
+
+def test_failed_tool_call_is_flagged():
+    update = s.ToolCallProgress(
+        session_update="tool_call_update",
+        tool_call_id="t1",
+        status="failed",
+        content=[tool_content(text_block("command not found"))],
+    )
+    events = list(events_from_update(update))
+
+    assert len(events) == 1
+    assert isinstance(events[0], ToolResult)
+    assert events[0].failed
+    # No title on the update: the consumer falls back to the ToolUse's name.
+    assert events[0].name == ""
+
+
+def test_non_terminal_tool_status_yields_no_result():
+    for status in ("pending", "in_progress"):
+        update = s.ToolCallProgress(
+            session_update="tool_call_update", tool_call_id="t1", status=status
+        )
+        assert list(events_from_update(update)) == []
+
+
+def test_tool_call_start_with_terminal_status_yields_result():
+    update = s.ToolCallStart(
+        session_update="tool_call",
+        tool_call_id="t1",
+        title="Read a.py",
+        status="completed",
+    )
+    events = list(events_from_update(update))
+
+    assert [type(e) for e in events] == [ToolUse, ToolResult]
+
+
+def test_tool_output_is_capped():
+    update = s.ToolCallProgress(
+        session_update="tool_call_update",
+        tool_call_id="t1",
+        status="completed",
+        content=[tool_content(text_block("x" * 5000))],
+    )
+    output = next(iter(events_from_update(update))).output
+    assert output.endswith(" …")
+    assert len(output) == 2002
+
+
+def test_non_text_tool_content_is_skipped():
+    update = s.ToolCallProgress(
+        session_update="tool_call_update",
+        tool_call_id="t1",
+        status="completed",
+        content=[tool_content(image_block("ZGF0YQ==", "image/png"))],
+    )
+    assert next(iter(events_from_update(update))).output == ""
+
+
+def test_plan_update_maps_to_plan_steps():
+    update = update_plan(
+        [
+            plan_entry("read the code", status="completed", priority="high"),
+            plan_entry("write the fix", status="in_progress"),
+        ]
+    )
+    events = list(events_from_update(update))
+
+    assert len(events) == 1
+    plan = events[0]
+    assert isinstance(plan, Plan)
+    assert [(step.content, step.status, step.priority) for step in plan.steps] == [
+        ("read the code", "completed", "high"),
+        ("write the fix", "in_progress", "medium"),
+    ]
+
+
+def test_plan_content_update_with_items_maps_to_plan_steps():
+    update = s.AgentPlanContentUpdate(
+        session_update="plan_update",
+        plan=s.PlanUpdateItems(
+            type="items", id="p1", entries=[plan_entry("do the thing")]
+        ),
+    )
+    events = list(events_from_update(update))
+
+    assert len(events) == 1
+    assert isinstance(events[0], Plan)
+    assert events[0].steps[0].content == "do the thing"
+
+
+def test_markdown_plan_is_not_flattened_into_steps():
+    update = s.AgentPlanContentUpdate(
+        session_update="plan_update",
+        plan=s.PlanUpdateMarkdown(type="markdown", id="p1", content="# do it"),
+    )
+    assert list(events_from_update(update)) == []
 
 
 def test_usage_update_yields_nothing():
@@ -196,6 +331,317 @@ async def test_read_with_line_and_limit(tmp_path):
     # A negative limit must not slice from the end; it yields nothing.
     resp = await client.read_text_file("sess", str(target), line=1, limit=-1)
     assert resp.content == ""
+
+
+class _FakeConn:
+    """Records the session-lifecycle calls the backend makes."""
+
+    def __init__(self) -> None:
+        self.loaded: str | None = None
+        self.opened = False
+
+    async def load_session(self, *, cwd, session_id, mcp_servers):
+        self.loaded = session_id
+
+    async def new_session(self, *, cwd, mcp_servers):
+        self.opened = True
+        return s.NewSessionResponse(session_id="fresh")
+
+
+class _FakeProcess:
+    returncode: int | None = None
+
+
+def _agent(conn=None, *, load_session=False, session_id=None) -> _Agent:
+    return _Agent(
+        stack=AsyncExitStack(),
+        conn=conn or _FakeConn(),
+        process=_FakeProcess(),
+        client=_BridgeClient(),
+        capabilities=s.AgentCapabilities(load_session=load_session),
+        session_id=session_id,
+    )
+
+
+async def _open(agent, resume) -> tuple[str, list]:
+    """Open a session on a fake agent, collecting the events it emits."""
+    events: list = []
+
+    class _Collector:
+        async def emit(self, event):
+            events.append(event)
+
+    session_id = await ACPBackend(agent="gemini")._open_session(
+        agent, RunRequest(prompt="hi", resume=resume), _Collector()
+    )
+    return session_id, events
+
+
+@pytest.mark.asyncio
+async def test_resume_loads_the_session_when_the_agent_supports_it():
+    agent = _agent(load_session=True)
+    session_id, events = await _open(agent, "sess-1")
+
+    assert session_id == "sess-1"
+    assert agent.conn.loaded == "sess-1"
+    assert not agent.conn.opened
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_resume_without_load_support_notices_the_lost_continuity():
+    agent = _agent(load_session=False)
+    session_id, events = await _open(agent, "sess-1")
+
+    assert session_id == "fresh"
+    assert agent.conn.opened
+    assert len(events) == 1
+    assert isinstance(events[0], Notice)
+    assert "gemini" in events[0].text
+    assert "session/load" in events[0].text
+
+
+@pytest.mark.asyncio
+async def test_a_first_turn_opens_a_session_without_a_notice():
+    agent = _agent(load_session=False)
+    session_id, events = await _open(agent, None)
+
+    assert session_id == "fresh"
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_a_process_that_already_holds_the_session_skips_the_handshake():
+    # The point of pooling: a follow-up turn costs neither a session/load nor a
+    # new session, because this process is already in that conversation.
+    agent = _agent(load_session=True, session_id="sess-1")
+    session_id, events = await _open(agent, "sess-1")
+
+    assert session_id == "sess-1"
+    assert agent.conn.loaded is None
+    assert not agent.conn.opened
+    assert events == []
+
+
+def _pooling_backend(monkeypatch) -> tuple[ACPBackend, list[_Agent]]:
+    """A backend whose _spawn hands out fake agents instead of subprocesses."""
+    backend = ACPBackend(agent="gemini")
+    spawned: list[_Agent] = []
+
+    async def _spawn(self):
+        agent = _agent()
+        spawned.append(agent)
+        return agent
+
+    monkeypatch.setattr(ACPBackend, "_spawn", _spawn)
+    return backend, spawned
+
+
+@pytest.mark.asyncio
+async def test_a_context_reuses_its_agent_and_a_new_context_gets_its_own(monkeypatch):
+    backend, spawned = _pooling_backend(monkeypatch)
+
+    first = await backend._acquire("ctx-a")
+    again = await backend._acquire("ctx-a")
+    other = await backend._acquire("ctx-b")
+
+    assert first is again
+    assert other is not first
+    assert len(spawned) == 2
+    await backend.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_dead_agent_is_replaced_rather_than_handed_out(monkeypatch):
+    backend, _ = _pooling_backend(monkeypatch)
+
+    first = await backend._acquire("ctx-a")
+    first.process.returncode = 1
+    replacement = await backend._acquire("ctx-a")
+
+    assert replacement is not first
+    await backend.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_broken_agent_is_replaced_rather_than_handed_out(monkeypatch):
+    backend, _ = _pooling_backend(monkeypatch)
+
+    first = await backend._acquire("ctx-a")
+    first.broken = True
+
+    assert await backend._acquire("ctx-a") is not first
+    await backend.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_turn_without_a_context_is_not_pooled(monkeypatch):
+    backend, _ = _pooling_backend(monkeypatch)
+
+    agent = await backend._acquire(None)
+
+    assert not agent.pooled
+    assert backend._agents == {}
+
+
+async def _turn(backend, context_id) -> _Agent:
+    """Acquire an agent and release it, as a completed turn would."""
+    agent = await backend._acquire(context_id)
+    agent.claims -= 1
+    return agent
+
+
+@pytest.mark.asyncio
+async def test_the_pool_evicts_the_least_recently_used_idle_agent(monkeypatch):
+    monkeypatch.setattr(acp_mod, "_MAX_AGENTS", 2)
+    backend, _ = _pooling_backend(monkeypatch)
+
+    await _turn(backend, "ctx-a")
+    await _turn(backend, "ctx-b")
+    # Touch "a" so "b" becomes least recently used, then overflow.
+    await _turn(backend, "ctx-a")
+    await _turn(backend, "ctx-c")
+
+    assert set(backend._agents) == {"ctx-a", "ctx-c"}
+    await backend.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_busy_agent_is_never_evicted(monkeypatch):
+    monkeypatch.setattr(acp_mod, "_MAX_AGENTS", 1)
+    backend, _ = _pooling_backend(monkeypatch)
+
+    busy = await backend._acquire("ctx-a")
+    async with busy.lock:
+        # Rather than kill a running turn's agent, the pool overshoots.
+        await _turn(backend, "ctx-b")
+        assert set(backend._agents) == {"ctx-a", "ctx-b"}
+    await backend.aclose()
+
+
+@pytest.mark.asyncio
+async def test_an_agent_handed_out_is_not_evicted_before_its_turn_starts(monkeypatch):
+    # _acquire drops the pool lock before drive takes the agent's own lock. In
+    # that gap the agent is idle but spoken for, and evicting it would close the
+    # connection the turn is about to prompt on.
+    monkeypatch.setattr(acp_mod, "_MAX_AGENTS", 1)
+    backend, _ = _pooling_backend(monkeypatch)
+
+    claimed = await backend._acquire("ctx-a")
+    assert not claimed.lock.locked()
+
+    await backend._acquire("ctx-b")
+
+    assert set(backend._agents) == {"ctx-a", "ctx-b"}
+    await backend.aclose()
+
+
+@pytest.mark.asyncio
+async def test_an_agent_becomes_evictable_once_its_turn_releases_it(monkeypatch):
+    monkeypatch.setattr(acp_mod, "_MAX_AGENTS", 1)
+    backend, _ = _pooling_backend(monkeypatch)
+
+    async def _noop(self, agent, session, request):
+        return
+
+    monkeypatch.setattr(ACPBackend, "_run_turn", _noop)
+    session = BackendSession()
+    await backend.drive(session, RunRequest(prompt="a", context_id="ctx-a"))
+    await session.close()
+
+    await _turn(backend, "ctx-b")
+
+    assert set(backend._agents) == {"ctx-b"}
+    await backend.aclose()
+
+
+@pytest.mark.asyncio
+async def test_aclose_empties_the_pool(monkeypatch):
+    backend, _ = _pooling_backend(monkeypatch)
+    await backend._acquire("ctx-a")
+    await backend._acquire("ctx-b")
+
+    await backend.aclose()
+
+    assert backend._agents == {}
+
+
+@pytest.mark.asyncio
+async def test_a_second_turn_in_one_conversation_says_it_is_waiting(monkeypatch):
+    backend, _ = _pooling_backend(monkeypatch)
+    agent = await backend._acquire("ctx-a")
+    started = asyncio.Event()
+
+    async def _park(self, agent, session, request):
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(ACPBackend, "_run_turn", _park)
+
+    first = BackendSession()
+    first.start(lambda s: backend.drive(s, RunRequest(prompt="a", context_id="ctx-a")))
+    await started.wait()
+
+    second = BackendSession()
+    second.start(lambda s: backend.drive(s, RunRequest(prompt="b", context_id="ctx-a")))
+    # Only the notice: the turn itself is still blocked behind the first one, so
+    # draining to completion would wait forever.
+    first_event = await anext(aiter(second.drain()))
+
+    assert isinstance(first_event, Notice)
+    assert "waiting" in first_event.text
+    assert agent.lock.locked()
+    await first.close()
+    await second.close()
+
+
+@pytest.mark.asyncio
+async def test_a_turn_cancelled_while_queued_releases_its_claim(monkeypatch):
+    backend, _ = _pooling_backend(monkeypatch)
+    agent = await backend._acquire("ctx-a")
+    agent.claims -= 1
+    started = asyncio.Event()
+
+    async def _park(self, agent, session, request):
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(ACPBackend, "_run_turn", _park)
+
+    first = BackendSession()
+    first.start(lambda s: backend.drive(s, RunRequest(prompt="a", context_id="ctx-a")))
+    await started.wait()
+
+    queued = asyncio.ensure_future(
+        backend.drive(BackendSession(), RunRequest(prompt="b", context_id="ctx-a"))
+    )
+    await asyncio.sleep(0)
+    assert agent.claims == 2
+    queued.cancel()
+    with suppress(asyncio.CancelledError):
+        await queued
+
+    # Only the running turn still holds it; a claim stuck at 2 would pin the
+    # agent in the pool forever.
+    assert agent.claims == 1
+    await first.close()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_turn_retires_its_agent(monkeypatch):
+    backend, _ = _pooling_backend(monkeypatch)
+
+    async def _boom(self, agent, session, request):
+        raise RuntimeError("the agent fell over")
+
+    monkeypatch.setattr(ACPBackend, "_run_turn", _boom)
+
+    with pytest.raises(RuntimeError):
+        await backend.drive(BackendSession(), RunRequest(prompt="hi", context_id="c"))
+
+    # It stays in the map, but as unusable, so the next turn replaces it rather
+    # than resuming a conversation on a connection of unknown state.
+    assert not backend._agents["c"].usable
 
 
 @pytest.mark.asyncio

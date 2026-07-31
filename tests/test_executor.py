@@ -3,7 +3,16 @@
 from __future__ import annotations
 
 from a2acode import executor as executor_mod
-from a2acode.backends import BackendSession, RunRequest, make_backend
+from a2acode.backends import (
+    BackendSession,
+    Notice,
+    Plan,
+    PlanStep,
+    RunRequest,
+    ToolResult,
+    ToolUse,
+    make_backend,
+)
 from a2acode.executor import ClaudeCodeExecutor
 
 
@@ -95,26 +104,109 @@ async def test_eviction_falls_back_to_oldest_when_none_parked(monkeypatch):
 
 
 class _RecordingUpdater:
-    """Captures the terminal call _pump makes, without a real event queue."""
+    """Captures the calls _pump makes, without a real event queue."""
 
     def __init__(self) -> None:
         self.did_fail = False
         self.did_complete = False
+        self.status_lines: list[str] = []
+        self.artifacts: list[tuple[str | None, str]] = []
+        self.artifact_ids: list[str | None] = []
 
     def new_agent_message(self, parts, metadata=None):
         return parts
 
-    async def add_artifact(self, *_args, **_kwargs):  # pragma: no cover - unused here
-        pass
+    async def add_artifact(self, parts, *, name=None, artifact_id=None, **_kwargs):
+        self.artifacts.append((name, "".join(p.text for p in parts)))
+        self.artifact_ids.append(artifact_id)
 
-    async def update_status(self, *_args, **_kwargs):  # pragma: no cover - unused
-        pass
+    async def update_status(self, _state, message=None):
+        self.status_lines.append("".join(p.text for p in message or []))
 
     async def failed(self, message=None):
         self.did_fail = True
 
     async def complete(self, message=None):
         self.did_complete = True
+
+
+async def _pump_events(*events) -> _RecordingUpdater:
+    """Run _pump over a fixed event list and return what the updater saw."""
+
+    async def _emit(session):
+        for event in events:
+            await session.emit(event)
+
+    session = BackendSession()
+    session.start(_emit)
+    updater = _RecordingUpdater()
+    try:
+        await ClaudeCodeExecutor(make_backend("echo"))._pump(
+            updater, "task-x", "ctx-x", session
+        )
+    finally:
+        await session.close()
+    return updater
+
+
+async def test_pump_reports_a_tool_outcome_against_the_tool_name():
+    updater = await _pump_events(
+        ToolUse(name="Bash", tool_input={"command": "ls"}, tool_use_id="t1"),
+        # No name on the result: it must resolve through the ToolUse above.
+        ToolResult(tool_use_id="t1"),
+    )
+    assert updater.status_lines == ["$ ls", "✓ Bash"]
+
+
+async def test_pump_reports_a_failure_with_its_first_line():
+    updater = await _pump_events(
+        ToolUse(name="Bash", tool_input={"command": "nope"}, tool_use_id="t1"),
+        ToolResult(tool_use_id="t1", failed=True, output="command not found\ntrace\n"),
+    )
+    assert updater.status_lines[-1] == "✗ Bash: command not found"
+
+
+async def test_pump_falls_back_when_a_result_has_no_matching_tool_use():
+    updater = await _pump_events(ToolResult(tool_use_id="unknown"))
+    assert updater.status_lines == ["✓ tool"]
+
+
+async def test_pump_replaces_the_plan_artifact_on_every_update():
+    updater = await _pump_events(
+        Plan(steps=[PlanStep(content="step one", status="in_progress")]),
+        Plan(
+            steps=[
+                PlanStep(content="step one", status="completed"),
+                PlanStep(content="step two", priority="high"),
+            ]
+        ),
+    )
+    names = [name for name, _ in updater.artifacts]
+    assert names == ["plan", "plan"]
+    assert updater.artifacts[0][1] == "- [>] step one\n"
+    assert updater.artifacts[1][1] == "- [x] step one\n- [ ] (high) step two\n"
+    # One artifact id across updates, so the caller replaces rather than stacks.
+    assert len({a for a in updater.artifact_ids if a}) == 1
+
+
+async def test_pump_relays_a_notice_as_a_status_update():
+    updater = await _pump_events(Notice(text="starting a fresh session"))
+    assert updater.status_lines == ["starting a fresh session"]
+
+
+async def test_pump_skips_an_empty_plan_when_none_was_ever_shown():
+    updater = await _pump_events(Plan(steps=[]))
+    assert updater.artifacts == []
+
+
+async def test_pump_clears_a_plan_the_agent_abandoned():
+    updater = await _pump_events(
+        Plan(steps=[PlanStep(content="step one")]),
+        Plan(steps=[]),
+    )
+    # The second update must replace the checklist, not leave the stale one up.
+    assert [text for _, text in updater.artifacts] == ["- [ ] step one\n", ""]
+    assert len({a for a in updater.artifact_ids if a}) == 1
 
 
 async def test_pump_fails_an_evicted_session():

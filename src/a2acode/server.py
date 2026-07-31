@@ -29,7 +29,7 @@ from starlette.applications import Starlette
 from starlette.middleware import Middleware
 
 from .auth import BearerAuthMiddleware
-from .backends.base import Backend
+from .backends.base import Backend, ClosableBackend
 from .card import build_card
 from .executor import ClaudeCodeExecutor
 
@@ -73,6 +73,10 @@ def build_app(
     @asynccontextmanager
     async def lifespan(_app):
         yield
+        # A backend may hold agent subprocesses across requests; shutting the
+        # server down has to take them with it rather than orphan them.
+        if isinstance(backend, ClosableBackend):
+            await backend.aclose()
         await push_client.aclose()
 
     routes = [

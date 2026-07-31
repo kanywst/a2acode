@@ -7,6 +7,10 @@ point the background task is parked inside ``request_permission`` waiting for a
 decision. A later ``resolve`` un-parks it. This decoupling is what allows the
 A2A ``input-required`` round trip to span two separate ``execute`` calls while
 the Claude session stays alive in between.
+
+Shutting a session down goes the other way: ``close`` first asks the agent to
+stop through whatever the backend registered with ``set_canceller``, and only
+cancels the runner if that does not land.
 """
 
 from __future__ import annotations
@@ -33,12 +37,17 @@ _DONE = object()
 # mid-flight (e.g. after its session is dropped on a client disconnect).
 _RUNNERS: set[asyncio.Task[None]] = set()
 
+# How long a protocol-level cancel gets to land, and then how long the run gets
+# to wind down, before the runner is torn down regardless.
+_CANCEL_TIMEOUT = 5.0
+
 
 class BackendSession:
     def __init__(self) -> None:
         self._queue: asyncio.Queue[Any] = asyncio.Queue()
         self._pending: dict[str, asyncio.Future[PermissionDecision]] = {}
         self._runner: asyncio.Task[None] | None = None
+        self._canceller: Callable[[], Awaitable[None]] | None = None
         self.last_request_id: str | None = None
         self.done = False
         # Set when the executor drops this session to free a capacity slot, so
@@ -69,6 +78,14 @@ class BackendSession:
         self._runner = asyncio.create_task(runner())
         _RUNNERS.add(self._runner)
         self._runner.add_done_callback(_RUNNERS.discard)
+
+    def set_canceller(self, canceller: Callable[[], Awaitable[None]]) -> None:
+        """Register how to ask the agent to stop of its own accord.
+
+        Cancelling the runner tears the agent down wherever it is, possibly
+        mid-edit; ``close`` tries this first.
+        """
+        self._canceller = canceller
 
     async def emit(self, event: BackendEvent) -> None:
         await self._queue.put(event)
@@ -119,8 +136,31 @@ class BackendSession:
         if self._runner is not None and not self._runner.done():
             self._runner.cancel()
 
+    async def _request_stop(self, runner: asyncio.Task[None]) -> None:
+        """Ask the agent to stop, and give the run a bounded chance to finish.
+
+        A protocol-level cancel usually makes the turn return normally, so the
+        runner ends on its own with no work half-applied. An agent that ignores
+        it falls through to the hard cancel in ``close``.
+        """
+        if self._canceller is None:
+            return
+        # Its own task, collected with wait(), so no failure mode escapes -
+        # including a CancelledError, which would otherwise read as this
+        # coroutine being cancelled and skip the fallback.
+        stop: asyncio.Task[None] = asyncio.ensure_future(self._canceller())
+        await asyncio.wait([stop], timeout=_CANCEL_TIMEOUT)
+        if stop.done():
+            with suppress(BaseException):
+                stop.result()
+        else:
+            stop.cancel()
+        await asyncio.wait([runner], timeout=_CANCEL_TIMEOUT)
+
     async def close(self) -> None:
         try:
+            if self._runner is not None and not self._runner.done():
+                await self._request_stop(self._runner)
             if self._runner is not None and not self._runner.done():
                 self._runner.cancel()
                 with suppress(asyncio.CancelledError):
