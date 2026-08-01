@@ -41,11 +41,13 @@ import asyncio
 import base64
 import logging
 import os
+import shlex
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import AsyncExitStack, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from acp import (
     PROTOCOL_VERSION,
@@ -62,6 +64,7 @@ from .base import (
     BackendEvent,
     FileChange,
     Notice,
+    PermissionDecision,
     Plan,
     PlanStep,
     Result,
@@ -73,6 +76,7 @@ from .base import (
 )
 from .diff import unified_diff
 from .session import BackendSession
+from .terminal import DEFAULT_OUTPUT_LIMIT, MAX_OUTPUT_LIMIT, Terminal, spawn
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +88,9 @@ _MAX_TOOL_OUTPUT = 2000
 # process holding a real conversation, so this bounds memory and file handles
 # the way the executor's own maps bound sessions.
 _MAX_AGENTS = 32
+
+# Terminals an agent may hold open at once within a turn.
+_MAX_TERMINALS = 16
 
 # How to launch each known ACP agent adapter as a subprocess. A preset is just a
 # default command; pass an explicit ``command``/``args`` to drive any other ACP
@@ -275,14 +282,32 @@ class _BridgeClient(Client):
         # we advertise. ACP paths are absolute, but we still contain them.
         self._cwd = Path(cwd).resolve()
         self.cost_usd: float | None = None
+        self._terminals: dict[str, Terminal] = {}
 
     def bind(self, session: BackendSession) -> None:
         """Route this connection's output to ``session`` for one turn."""
         self._session = session
         self.cost_usd = None
 
-    def unbind(self) -> None:
+    async def unbind(self) -> None:
         self._session = None
+        # Terminals belong to the turn that opened them. An agent is meant to
+        # release its own, but a crashed or cancelled one would otherwise leave
+        # processes running on the server with nobody to reap them.
+        terminals, self._terminals = list(self._terminals.values()), {}
+        for terminal in terminals:
+            await terminal.close()
+
+    async def _approve(
+        self, name: str, tool_input: dict[str, Any], description: str
+    ) -> PermissionDecision:
+        """Put an action to the A2A caller, denying if nobody can answer."""
+        if self._session is None:
+            # Between turns: approving would act with nobody watching.
+            return PermissionDecision(
+                request_id="", allow=False, message="no caller attached"
+            )
+        return await self._session.request_permission(name, tool_input, description)
 
     def _safe_path(self, path: str) -> Path:
         target = Path(path)
@@ -308,16 +333,8 @@ class _BridgeClient(Client):
         options: list[s.PermissionOption],
         **_: Any,
     ) -> s.RequestPermissionResponse:
-        if self._session is None:
-            # No turn in flight, so no caller could answer; approving would run
-            # a tool nobody asked for and nobody is watching.
-            return s.RequestPermissionResponse(
-                outcome=s.DeniedOutcome(outcome="cancelled")
-            )
         name = tool_call.title or (tool_call.kind or "tool")
-        decision = await self._session.request_permission(
-            name, _as_dict(tool_call.raw_input), name
-        )
+        decision = await self._approve(name, _as_dict(tool_call.raw_input), name)
         option_id = select_option(options, allow=decision.allow)
         if option_id is None:
             # The agent offered no option of the requested polarity; cancelling
@@ -365,6 +382,83 @@ class _BridgeClient(Client):
         # loop the ACP connection runs on.
         text = await asyncio.to_thread(_read)
         return s.ReadTextFileResponse(content=text)
+
+    async def create_terminal(
+        self,
+        session_id: str,
+        command: str,
+        args: list[str] | None = None,
+        env: list[s.EnvVariable] | None = None,
+        cwd: str | None = None,
+        output_byte_limit: int | None = None,
+        **_: Any,
+    ) -> s.CreateTerminalResponse:
+        argv = list(args or [])
+        # Running a command is exactly the kind of act the caller holds the
+        # decision on, so it takes the same round trip as any tool. Without this
+        # gate, advertising the capability would hand the agent a way around the
+        # permission model rather than a safer place to execute.
+        decision = await self._approve(
+            "Terminal",
+            {"command": command, "args": argv, "cwd": cwd},
+            shlex.join([command, *argv]),
+        )
+        if not decision.allow:
+            raise PermissionError(decision.message or "terminal denied by A2A caller")
+
+        if len(self._terminals) >= _MAX_TERMINALS:
+            raise RuntimeError(f"too many open terminals (limit {_MAX_TERMINALS})")
+
+        limit = min(output_byte_limit or DEFAULT_OUTPUT_LIMIT, MAX_OUTPUT_LIMIT)
+        terminal = await spawn(
+            command,
+            argv,
+            cwd=self._safe_path(cwd) if cwd else self._cwd,
+            env={var.name: var.value for var in env or []},
+            limit=max(limit, 1),
+        )
+        terminal_id = uuid4().hex
+        self._terminals[terminal_id] = terminal
+        return s.CreateTerminalResponse(terminal_id=terminal_id)
+
+    async def terminal_output(
+        self, session_id: str, terminal_id: str, **_: Any
+    ) -> s.TerminalOutputResponse:
+        terminal = self._terminal(terminal_id)
+        status = terminal.exit_status()
+        return s.TerminalOutputResponse(
+            output=terminal.output,
+            truncated=terminal.truncated,
+            exit_status=None
+            if status is None
+            else s.TerminalExitStatus(exit_code=status[0], signal=status[1]),
+        )
+
+    async def wait_for_terminal_exit(
+        self, session_id: str, terminal_id: str, **_: Any
+    ) -> s.WaitForTerminalExitResponse:
+        exit_code, signal = await self._terminal(terminal_id).wait()
+        return s.WaitForTerminalExitResponse(exit_code=exit_code, signal=signal)
+
+    async def kill_terminal(
+        self, session_id: str, terminal_id: str, **_: Any
+    ) -> s.KillTerminalResponse | None:
+        await self._terminal(terminal_id).kill()
+        return s.KillTerminalResponse()
+
+    async def release_terminal(
+        self, session_id: str, terminal_id: str, **_: Any
+    ) -> s.ReleaseTerminalResponse | None:
+        terminal = self._terminals.pop(terminal_id, None)
+        if terminal is not None:
+            await terminal.close()
+        return s.ReleaseTerminalResponse()
+
+    def _terminal(self, terminal_id: str) -> Terminal:
+        terminal = self._terminals.get(terminal_id)
+        if terminal is None:
+            raise ValueError(f"unknown terminal {terminal_id!r}")
+        return terminal
 
     async def write_text_file(
         self, session_id: str, path: str, content: str, **_: Any
@@ -468,7 +562,7 @@ class ACPBackend:
                     agent.broken = True
                     raise
                 finally:
-                    agent.client.unbind()
+                    await agent.client.unbind()
         finally:
             # Outside the lock: a turn cancelled while queued behind another
             # never takes it, and must still give the claim back.
@@ -565,7 +659,8 @@ class ACPBackend:
                 client_capabilities=s.ClientCapabilities(
                     fs=s.FileSystemCapabilities(
                         read_text_file=True, write_text_file=True
-                    )
+                    ),
+                    terminal=True,
                 ),
             )
         except BaseException:

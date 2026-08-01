@@ -159,6 +159,8 @@ uv run a2acode call "allow" --task <id> --context <id>
 
 Whatever the agent decides needs approval becomes an `input-required` pause rather than being silently skipped or auto-approved; the caller, not the server, holds the decision. Read-only actions the agent already treats as safe still run without a prompt.
 
+The same gate covers commands. a2acode serves ACP's terminal capability, so an agent can run a build or a test suite through the server instead of shelling out on its own — and every one of those goes through the caller for approval first, starts inside the workspace, has its output bounded, and is killed with the turn. Accepting that delegation is only safe because of the gate; without it, advertising the capability would hand the agent a way around the permission model rather than a safer place to execute.
+
 ## Long-running tasks
 
 The agent card advertises push notifications. A caller can register a webhook for a task and receive status and artifact updates by HTTP POST instead of holding a stream open, which helps when a run takes minutes. Streaming and polling (`tasks/get`) both work too.
