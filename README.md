@@ -169,7 +169,9 @@ uv run a2acode call "allow" --task <id> --context <id>
 
 Whatever the agent decides needs approval becomes an `input-required` pause rather than being silently skipped or auto-approved; the caller, not the server, holds the decision. Read-only actions the agent already treats as safe still run without a prompt.
 
-The same gate covers commands. a2acode serves ACP's terminal capability, so an agent can run a build or a test suite through the server instead of shelling out on its own — and every one of those goes through the caller for approval first, starts inside the workspace, has its output bounded, and is killed with the turn. Accepting that delegation is only safe because of the gate; without it, advertising the capability would hand the agent a way around the permission model rather than a safer place to execute.
+The same gate covers commands. a2acode serves ACP's terminal capability, so an agent can run a build or a test suite through the server instead of shelling out on its own, and every one of those goes through the caller for approval first — the caller sees the exact command line before anything spawns. Without that gate, advertising the capability would have handed the agent a way *around* the permission model, since `terminal/create` is a direct client call and nothing in the protocol obliges an agent to ask permission first.
+
+Be clear about what the gate is and is not. **The approval is the security boundary; the process is not sandboxed.** An approved command runs as the user the server runs as and can read anything that user can, wherever it lives — the workspace only sets its working directory. What a2acode does around that: the command inherits a named set of environment variables (`PATH`, `HOME`, `LANG`, `TMPDIR`, `TERM`, `SHELL`, `USER`, `TZ`, `LC_*`) rather than the server's whole environment, so the provider credentials the server holds are not handed to it; output is capped; and anything still running is killed with the turn. Run the server as a user that owns nothing you would not approve a command to read.
 
 ## Long-running tasks
 
