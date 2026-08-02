@@ -202,7 +202,7 @@ def test_plan_content_update_with_items_maps_to_plan_steps():
     update = s.AgentPlanContentUpdate(
         session_update="plan_update",
         plan=s.PlanUpdateItems(
-            type="items", id="p1", entries=[plan_entry("do the thing")]
+            type="items", plan_id="p1", entries=[plan_entry("do the thing")]
         ),
     )
     events = list(events_from_update(update))
@@ -215,7 +215,7 @@ def test_plan_content_update_with_items_maps_to_plan_steps():
 def test_markdown_plan_is_carried_as_prose_not_flattened_into_steps():
     update = s.AgentPlanContentUpdate(
         session_update="plan_update",
-        plan=s.PlanUpdateMarkdown(type="markdown", id="p1", content="# do it"),
+        plan=s.PlanUpdateMarkdown(type="markdown", plan_id="p1", content="# do it"),
     )
     events = list(events_from_update(update))
 
@@ -228,7 +228,7 @@ def test_markdown_plan_is_carried_as_prose_not_flattened_into_steps():
 def test_file_plan_is_carried_as_a_pointer():
     update = s.AgentPlanContentUpdate(
         session_update="plan_update",
-        plan=s.PlanUpdateFile(type="file", id="p1", uri="file:///tmp/plan.md"),
+        plan=s.PlanUpdateFile(type="file", plan_id="p1", uri="file:///tmp/plan.md"),
     )
     assert list(events_from_update(update)) == [Plan(uri="file:///tmp/plan.md")]
 
