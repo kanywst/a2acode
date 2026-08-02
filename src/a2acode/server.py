@@ -12,9 +12,12 @@ agent sessions, which are processes and die with the server either way.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from contextlib import asynccontextmanager
-from typing import Any
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager, suppress
+from typing import TYPE_CHECKING, Protocol, cast
+
+if TYPE_CHECKING:  # only installed with the persistence extra
+    from sqlalchemy.ext.asyncio import AsyncEngine
 
 import httpx
 from a2a.server.context import ServerCallContext
@@ -28,6 +31,8 @@ from a2a.server.tasks import (
     BasePushNotificationSender,
     InMemoryPushNotificationConfigStore,
     InMemoryTaskStore,
+    PushNotificationConfigStore,
+    TaskStore,
 )
 from a2a.types import AgentCard
 from starlette.applications import Starlette
@@ -39,7 +44,15 @@ from .card import build_card
 from .executor import ClaudeCodeExecutor
 
 
-def _stores(task_db: str | None) -> tuple[Any, Any, Any]:
+class _Initializable(Protocol):
+    """A store that creates its schema before first use."""
+
+    async def initialize(self) -> None: ...
+
+
+def _stores(
+    task_db: str | None,
+) -> tuple[AsyncEngine | None, TaskStore, PushNotificationConfigStore]:
     """Pick the task and push-config stores, plus the engine backing them.
 
     Imported lazily: the database stores pull SQLAlchemy and a driver, which
@@ -100,20 +113,29 @@ def build_app(
     )
 
     @asynccontextmanager
-    async def lifespan(_app):
+    async def lifespan(_app: Starlette) -> AsyncIterator[None]:
         if engine is not None:
             # Creates the tables on first run, and fails startup rather than the
-            # first request if the database is unreachable.
-            await task_store.initialize()
-            await push_config_store.initialize()
-        yield
-        # A backend may hold agent subprocesses across requests; shutting the
-        # server down has to take them with it rather than orphan them.
-        if isinstance(backend, ClosableBackend):
-            await backend.aclose()
-        await push_client.aclose()
-        if engine is not None:
-            await engine.dispose()
+            # first request if the database is unreachable. Only the database
+            # stores have this; engine is not None exactly when they are in use.
+            await cast(_Initializable, task_store).initialize()
+            await cast(_Initializable, push_config_store).initialize()
+        try:
+            yield
+        finally:
+            # Nested so one failing close cannot strand the others, and in a
+            # finally so a crash during serving still releases everything. A
+            # backend may hold agent subprocesses; they must not outlive us.
+            try:
+                if isinstance(backend, ClosableBackend):
+                    with suppress(Exception):
+                        await backend.aclose()
+            finally:
+                with suppress(Exception):
+                    await push_client.aclose()
+                if engine is not None:
+                    with suppress(Exception):
+                        await engine.dispose()
 
     routes = [
         *create_agent_card_routes(card),

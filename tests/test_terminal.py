@@ -208,6 +208,28 @@ async def test_the_agents_output_limit_cannot_exceed_the_hard_ceiling(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_server_credentials_do_not_reach_an_agent_chosen_command(
+    tmp_path, monkeypatch
+):
+    # Approving that a command runs is not approving that it can read every
+    # secret the server was launched with.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-should-not-leak")
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    client = _client(_FakeSession(), tmp_path)
+
+    resp = await client.create_terminal(
+        "sess",
+        sys.executable,
+        ["-c", "import os; print(sorted(os.environ))"],
+    )
+    await client.wait_for_terminal_exit("sess", resp.terminal_id)
+    out = await client.terminal_output("sess", resp.terminal_id)
+
+    assert "ANTHROPIC_API_KEY" not in out.output
+    assert "PATH" in out.output
+
+
+@pytest.mark.asyncio
 async def test_env_variables_reach_the_process(tmp_path):
     client = _client(_FakeSession(), tmp_path)
 

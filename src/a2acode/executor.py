@@ -441,6 +441,17 @@ class ClaudeCodeExecutor(AgentExecutor):
             )
             return
 
+        if stream.sent_thought:
+            # Close it too, or a consumer waiting for a final chunk holds the
+            # thinking artifact open past the end of the task.
+            await updater.add_artifact(
+                [Part(text="")],
+                artifact_id=stream.thinking_artifact_id,
+                name="thinking",
+                append=True,
+                last_chunk=True,
+            )
+
         if stream.pending is not None:
             stream.chunks.append(stream.pending)
             await flush(stream.pending, last=True)

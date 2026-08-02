@@ -210,7 +210,13 @@ async def test_pump_streams_thinking_into_its_own_artifact():
     )
     thinking = [(name, text) for name, text in updater.artifacts if name == "thinking"]
 
-    assert thinking == [("thinking", "first "), ("thinking", "second")]
+    # Two chunks, then an empty one closing the artifact so a consumer waiting
+    # for a final chunk does not hold it open past the end of the task.
+    assert thinking == [
+        ("thinking", "first "),
+        ("thinking", "second"),
+        ("thinking", ""),
+    ]
     # The answer must not carry the reasoning.
     answers = [text for name, text in updater.artifacts if name == "response"]
     assert "first" not in "".join(answers)

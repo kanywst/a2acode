@@ -20,11 +20,14 @@ turned into events.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from typing import Any
 
 from acp.task import RpcTaskKind
+
+logger = logging.getLogger(__name__)
 
 
 class OrderedDispatcher:
@@ -63,6 +66,11 @@ class OrderedDispatcher:
                         self._spawn_request(task.message)
                     else:
                         await self._run_notification(task.message)
+                except Exception:
+                    # Handling notifications inline means one that raises would
+                    # otherwise end this loop, and the connection would go
+                    # silent for the rest of its life.
+                    logger.exception("dropping an ACP notification that failed")
                 finally:
                     self._queue.task_done()
         except asyncio.CancelledError:

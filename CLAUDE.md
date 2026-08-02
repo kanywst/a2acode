@@ -65,7 +65,7 @@ Every backend speaks the same event vocabulary, and the executor maps each onto 
 | `Plan`              | a `plan` artifact, replaced on each update               |
 | `Notice`            | a `working` status update about the run itself           |
 | `PermissionRequest` | an `input-required` pause the caller answers             |
-| `Result`            | cost / turns / usage metadata on the completion message  |
+| `Result`            | cost / turns / usage / stop reason on the completion     |
 
 `ToolResult` is optional in both protocols — an agent may never report a terminal status — so the executor treats a missing one as "no outcome reported" rather than assuming success, and resolves the tool's name against the earlier `ToolUse`. `Notice` is the one event the agent does not produce: it is the server telling the caller it had to run the turn differently than asked (a resume the agent cannot honour).
 

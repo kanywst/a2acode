@@ -24,7 +24,7 @@ Most adapters that put a coding agent behind A2A flatten everything to text in, 
 | Its plan for the turn       | A `plan` artifact, replaced as steps progress      |
 | A file edit (diff)          | A named artifact carrying the diff                 |
 | A permission request        | An `input-required` pause the caller answers       |
-| Run result                  | Cost, usage, and stop reason on the completion     |
+| Run result                  | Cost, turns, usage, stop reason on the completion  |
 | Session id                  | Mapped to the A2A `contextId` so follow-ups resume |
 
 The mapping is all in `executor.py`. Backends only emit normalized events; they never touch the protocol.

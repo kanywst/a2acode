@@ -301,8 +301,9 @@ class _BridgeClient(Client):
         # release its own, but a crashed or cancelled one would otherwise leave
         # processes running on the server with nobody to reap them.
         terminals, self._terminals = list(self._terminals.values()), {}
-        for terminal in terminals:
-            await terminal.close()
+        # Concurrently: each close waits on a process that may not die promptly,
+        # and this runs inside the turn's lock, holding up the next one.
+        await asyncio.gather(*(t.close() for t in terminals), return_exceptions=True)
 
     async def _approve(
         self, name: str, tool_input: dict[str, Any], description: str

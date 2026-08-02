@@ -24,6 +24,12 @@ MAX_OUTPUT_LIMIT = 8 * 1024 * 1024
 # How long a killed process gets to die before we stop waiting on it.
 _REAP_TIMEOUT = 5.0
 
+# Server variables a command inherits: enough to find a toolchain and behave
+# like a terminal, and nothing that identifies the server to a provider.
+_INHERITED_ENV = frozenset(
+    {"PATH", "HOME", "LANG", "TMPDIR", "TERM", "SHELL", "USER", "TZ"}
+)
+
 
 @dataclass
 class Terminal:
@@ -92,6 +98,22 @@ def _signal_name(number: int) -> str:
         return str(number)
 
 
+def base_environment() -> dict[str, str]:
+    """The server variables a command may inherit.
+
+    Deliberately not the server's whole environment. That holds the provider
+    credentials the agent adapter is launched with, and the command here is
+    chosen by the agent: approving that it runs is not approving that it can
+    read every secret the server holds. An agent that needs more passes it
+    explicitly in the request.
+    """
+    return {
+        name: value
+        for name, value in os.environ.items()
+        if name in _INHERITED_ENV or name.startswith("LC_")
+    }
+
+
 async def spawn(
     command: str,
     args: list[str],
@@ -108,7 +130,7 @@ async def spawn(
         stderr=asyncio.subprocess.STDOUT,
         stdin=asyncio.subprocess.DEVNULL,
         cwd=str(cwd),
-        env={**os.environ, **env},
+        env={**base_environment(), **env},
     )
     terminal = Terminal(process=process, limit=limit)
     terminal._pump = asyncio.create_task(terminal._read())
