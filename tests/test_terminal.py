@@ -214,8 +214,12 @@ async def test_the_caller_sees_the_environment_it_is_approving(tmp_path):
     # them would be approving the wrong thing.
     session = _FakeSession()
     client = _client(session, tmp_path)
+    empty_bin = tmp_path / "bin"
+    empty_bin.mkdir()
+    preload = tmp_path / "evil.so"
 
-    # The spawn then fails to find "make", which is the point: PATH really is
+    # Supplied PATH-first so the assertion below fails if the sort is dropped.
+    # The spawn then cannot find "make", which is the point: PATH really is
     # replaced by what the agent sent, so the caller had to be shown it.
     with pytest.raises(FileNotFoundError):
         await client.create_terminal(
@@ -223,14 +227,14 @@ async def test_the_caller_sees_the_environment_it_is_approving(tmp_path):
             "make",
             ["test"],
             env=[
-                s.EnvVariable(name="LD_PRELOAD", value="/tmp/evil.so"),
-                s.EnvVariable(name="PATH", value="/tmp/bin"),
+                s.EnvVariable(name="PATH", value=str(empty_bin)),
+                s.EnvVariable(name="LD_PRELOAD", value=str(preload)),
             ],
         )
 
     _, tool_input, description = session.asked[0]
-    assert tool_input["env"] == {"LD_PRELOAD": "/tmp/evil.so", "PATH": "/tmp/bin"}
-    assert description == "LD_PRELOAD=/tmp/evil.so PATH=/tmp/bin make test"
+    assert tool_input["env"] == {"PATH": str(empty_bin), "LD_PRELOAD": str(preload)}
+    assert description == f"LD_PRELOAD={preload} PATH={empty_bin} make test"
     await client.unbind()
 
 
@@ -247,6 +251,24 @@ async def test_an_environment_value_needing_quoting_is_shown_unambiguously(tmp_p
     )
 
     assert session.asked[0][2] == "X='a b; rm -rf /' sh -c true"
+    await client.unbind()
+
+
+@pytest.mark.asyncio
+async def test_an_environment_name_that_is_not_an_identifier_cannot_split(tmp_path):
+    # The name is agent-controlled too. One carrying a space must not render as
+    # two words the caller reads as separate arguments.
+    session = _FakeSession()
+    client = _client(session, tmp_path)
+
+    await client.create_terminal(
+        "sess",
+        "sh",
+        ["-c", "true"],
+        env=[s.EnvVariable(name="A B", value="c")],
+    )
+
+    assert session.asked[0][2] == "'A B=c' sh -c true"
     await client.unbind()
 
 

@@ -41,6 +41,7 @@ import asyncio
 import base64
 import logging
 import os
+import re
 import shlex
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import AsyncExitStack, suppress
@@ -97,6 +98,9 @@ _MAX_TERMINALS = 16
 
 # How long a finished turn waits for its trailing notifications to be handled.
 _DRAIN_TIMEOUT = 10.0
+
+# A shell-safe environment variable name, which an agent's need not be.
+_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 # How to launch each known ACP agent adapter as a subprocess. A preset is just a
 # default command; pass an explicit ``command``/``args`` to drive any other ACP
@@ -180,9 +184,16 @@ def _command_line(command: str, argv: Sequence[str], env: Mapping[str, str]) -> 
     The agent supplies its own variables, and PATH or LD_PRELOAD decide what a
     plausible-looking command actually executes. Showing the words without them
     would put an innocuous line in front of the caller and run something else.
+
+    The name is agent-controlled too, so one carrying spaces or quotes is shown
+    as a single quoted token rather than allowed to split into words the caller
+    would read as separate arguments.
     """
     assignments = " ".join(
-        f"{name}={shlex.quote(value)}" for name, value in sorted(env.items())
+        f"{name}={shlex.quote(value)}"
+        if _ENV_NAME.fullmatch(name)
+        else shlex.quote(f"{name}={value}")
+        for name, value in sorted(env.items())
     )
     line = shlex.join([command, *argv])
     return f"{assignments} {line}" if assignments else line
