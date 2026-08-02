@@ -51,11 +51,11 @@ ACP already standardizes the editor↔agent side and a dozen agents speak it; a2
 | --------- | ----------------------------------- | -------------------- |
 | `claude`  | `@zed-industries/claude-agent-acp`  | Anthropic API key    |
 | `codex`   | `@zed-industries/codex-acp`         | OpenAI credential    |
-| `gemini`  | `@google/gemini-cli --acp`          | Google account (see below) |
+| `gemini`  | `@google/gemini-cli --acp`          | Code Assist Standard or Enterprise |
 
 Or point `--agent-command` at any other ACP agent.
 
-**On the `gemini` preset:** as of August 2026 Google refuses ACP clients on Gemini Code Assist for individual accounts — the session fails with *"This client is no longer supported for Gemini Code Assist for individuals… migrate to the Antigravity suite"*. That is Google's account tier talking, not a2acode or ACP; the preset is kept because the flag and adapter are still current and other account types may be unaffected.
+**On the `gemini` preset:** Google stopped serving the Gemini CLI to consumer accounts on 18 June 2026 — the individual Code Assist tier and AI Pro/Ultra access — and points them at Antigravity instead. A session on one of those fails with *"This client is no longer supported for Gemini Code Assist for individuals"*. This is not specific to ACP or to a2acode: it is the whole CLI, on those tiers. Organization Code Assist Standard and Enterprise subscriptions are unaffected, which is why the preset stays.
 
 ## Quick start
 

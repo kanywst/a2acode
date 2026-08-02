@@ -100,7 +100,8 @@ _DRAIN_TIMEOUT = 10.0
 
 # How to launch each known ACP agent adapter as a subprocess. A preset is just a
 # default command; pass an explicit ``command``/``args`` to drive any other ACP
-# agent (or a pinned/locally installed adapter).
+# agent (or a pinned/locally installed adapter). All three go through npx so a
+# preset needs nothing installed beyond Node and the agent's own credential.
 _AGENTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "claude": ("npx", ("-y", "@zed-industries/claude-agent-acp")),
     "gemini": ("npx", ("-y", "@google/gemini-cli", "--acp")),
