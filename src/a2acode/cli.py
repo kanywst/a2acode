@@ -220,6 +220,10 @@ def _parts_text(parts) -> str:
     return "".join(p.text for p in parts if p.text)
 
 
+def _indent(text: str) -> str:
+    return "\n".join(f"  {line}" for line in text.splitlines())
+
+
 def _state_name(state) -> str:
     from a2a.types import TaskState
 
@@ -272,9 +276,19 @@ async def _call(text: str, url: str, context: str | None, task: str | None) -> N
                         meta = _format_meta(s.message) if s.message else ""
                         typer.echo(f"[{state}] {meta}".rstrip())
                 elif which == "artifact_update":
-                    streaming = True
-                    parts = event.artifact_update.artifact.parts
-                    typer.echo(_parts_text(parts), nl=False)
+                    artifact = event.artifact_update.artifact
+                    text = _parts_text(artifact.parts)
+                    if artifact.name == "response":
+                        streaming = True
+                        typer.echo(text, nl=False)
+                    elif text:
+                        # Plans, reasoning, and diffs are their own artifacts;
+                        # labelling them keeps them out of the answer's stream.
+                        if streaming:
+                            typer.echo("")
+                            streaming = False
+                        typer.echo(f"  [{artifact.name}]")
+                        typer.echo(_indent(text.rstrip()))
                 elif which == "message":
                     typer.echo(_parts_text(event.message.parts))
         finally:

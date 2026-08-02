@@ -210,7 +210,9 @@ def _describe_tool(event: ToolUse) -> str:
     if event.name == "Bash":
         return f"$ {str(i.get('command', '')).strip()[:120]}"
     path = i.get("file_path") or i.get("path") or i.get("pattern")
-    if path:
+    # ACP names a tool call with a human title that often already says the path
+    # ("Write calc.py"); appending it again reads as a stutter.
+    if path and str(path) not in event.name:
         return f"{event.name} {path}"
     return event.name
 

@@ -45,6 +45,8 @@ CLI / A2A caller
         -> claude.py    drives the Claude Agent SDK directly (ClaudeSDKClient)
         -> echo.py      dependency-free mirror, for tests and offline wiring checks
         -> attach.py    renders caller attachments into a prompt (shared, pure)
+        -> terminal.py  processes run on the server for an ACP agent
+        -> dispatch.py  ordered handling of an agent's notifications
 ```
 
 The `acp` backend is the headline: ACP's `session/update` stream, diff content, and `session/request_permission` map almost one-to-one onto the event vocabulary below, so vendor-neutrality is a launch-command choice rather than a backend per agent. ACP itself targets human-driven editors; a2acode's value is exposing an ACP agent to *remote A2A callers* with the permission round-trip and cost preserved.
@@ -56,6 +58,7 @@ Every backend speaks the same event vocabulary, and the executor maps each onto 
 | Backend event       | A2A surface                                              |
 | ------------------- | -------------------------------------------------------- |
 | `TextDelta`         | a streamed `response` artifact (`append` / `last_chunk`) |
+| `Thought`           | a separate `thinking` artifact, never the answer         |
 | `ToolUse`           | a `working` status update describing the action          |
 | `ToolResult`        | a `working` status update carrying the outcome           |
 | `FileChange`        | a named artifact carrying a unified diff                 |
@@ -84,6 +87,12 @@ An agent subprocess is kept alive per A2A context, not per turn: spawning one co
 - Each `_Agent` holds a lock for the whole turn, *including while parked on a permission*, because one ACP connection carries one conversation.
 - The pool is bounded (`_MAX_AGENTS`) and evicts the least recently used **idle** agent. A busy one is never evicted, so the pool overshoots rather than killing a running task's agent.
 - Any exception during a turn marks the agent `broken`; the next `_acquire` replaces it instead of resuming on a connection of unknown state.
+- Notifications are dispatched **in order and inline** (`dispatch.py`), and a turn waits on the queue before emitting its `Result`. The library's default dispatcher spawns a task per notification and marks the queue item done immediately, which lets a prompt's reply overtake the agent's last `session/update`s and lose the tail of the answer. Requests stay spawned — a permission request parks until the caller answers.
+- Terminals (`terminal.py`) are gated on the **same caller approval as any tool**. That gate is why advertising the capability is safe: `terminal/create` is a direct client call, and nothing in the protocol obliges an agent to ask permission first.
+
+### Testing the ACP path
+
+`tests/fake_agent.py` is a real ACP agent (~150 lines) that a2acode launches as a subprocess in `tests/test_live_acp.py`. It covers what only exists once a pipe is involved — handshake, session lifecycle, permission and terminal calls arriving *from* the agent, process reuse across turns — with no vendor, credential, or network. Reach for it when changing anything in `acp.py`; the unit tests mock one side and will not catch an ordering or lifecycle bug.
 
 ### Continuity and lifecycle (`executor.py`)
 

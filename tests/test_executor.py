@@ -168,6 +168,17 @@ async def test_pump_reports_a_failure_with_its_first_line():
     assert updater.status_lines[-1] == "✗ Bash: command not found"
 
 
+async def test_pump_does_not_repeat_a_path_the_tool_name_already_carries():
+    updater = await _pump_events(
+        # ACP titles a tool call for a human, so the path is often in the name.
+        ToolUse(
+            name="Write calc.py", tool_input={"file_path": "calc.py"}, tool_use_id="t1"
+        ),
+        ToolUse(name="Write", tool_input={"file_path": "other.py"}, tool_use_id="t2"),
+    )
+    assert updater.status_lines == ["Write calc.py", "Write other.py"]
+
+
 async def test_pump_falls_back_when_a_result_has_no_matching_tool_use():
     updater = await _pump_events(ToolResult(tool_use_id="unknown"))
     assert updater.status_lines == ["✓ tool"]
