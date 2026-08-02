@@ -45,7 +45,17 @@ ACP already standardizes the editor↔agent side and a dozen agents speak it; a2
 
 - Python 3.13+
 - [uv](https://docs.astral.sh/uv/)
-- An ACP agent adapter for the `acp` backend, launched as a subprocess. The `claude` preset uses `npx @zed-industries/claude-agent-acp` (needs Node and a Claude credential); `gemini` uses the Gemini CLI; or point `--agent-command` at any ACP agent.
+- An ACP agent adapter for the `acp` backend, launched as a subprocess. Every preset launches one with `npx`, so Node is the only prerequisite besides that agent's own credential:
+
+| `--agent` | Launches                            | Credential           |
+| --------- | ----------------------------------- | -------------------- |
+| `claude`  | `@zed-industries/claude-agent-acp`  | Anthropic API key    |
+| `codex`   | `@zed-industries/codex-acp`         | OpenAI credential    |
+| `gemini`  | `@google/gemini-cli --acp`          | Code Assist Standard or Enterprise |
+
+Or point `--agent-command` at any other ACP agent.
+
+**On the `gemini` preset:** Google stopped serving the Gemini CLI to consumer accounts on 18 June 2026 — the individual Code Assist tier and AI Pro/Ultra access — and points them at Antigravity instead. A session on one of those fails with *"This client is no longer supported for Gemini Code Assist for individuals"*. This is not specific to ACP or to a2acode: it is the whole CLI, on those tiers. Organization Code Assist Standard and Enterprise subscriptions are unaffected, which is why the preset stays.
 
 ## Quick start
 
@@ -159,7 +169,9 @@ uv run a2acode call "allow" --task <id> --context <id>
 
 Whatever the agent decides needs approval becomes an `input-required` pause rather than being silently skipped or auto-approved; the caller, not the server, holds the decision. Read-only actions the agent already treats as safe still run without a prompt.
 
-The same gate covers commands. a2acode serves ACP's terminal capability, so an agent can run a build or a test suite through the server instead of shelling out on its own — and every one of those goes through the caller for approval first, starts inside the workspace, has its output bounded, and is killed with the turn. Accepting that delegation is only safe because of the gate; without it, advertising the capability would hand the agent a way around the permission model rather than a safer place to execute.
+The same gate covers commands. a2acode serves ACP's terminal capability, so an agent can run a build or a test suite through the server instead of shelling out on its own, and every one of those goes through the caller for approval first — the caller sees the exact command line before anything spawns. Without that gate, advertising the capability would have handed the agent a way *around* the permission model, since `terminal/create` is a direct client call and nothing in the protocol obliges an agent to ask permission first.
+
+Be clear about what the gate is and is not. **The approval is the security boundary; the process is not sandboxed.** An approved command runs as the user the server runs as and can read anything that user can, wherever it lives — the workspace only sets its working directory. What a2acode does around that: the command inherits a named set of environment variables (`PATH`, `HOME`, `LANG`, `TMPDIR`, `TERM`, `SHELL`, `USER`, `TZ`, `LC_*`) rather than the server's whole environment, so the provider credentials the server holds are not handed to it; output is capped; and anything still running is killed with the turn. Run the server as a user that owns nothing you would not approve a command to read.
 
 ## Long-running tasks
 
