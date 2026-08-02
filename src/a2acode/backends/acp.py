@@ -103,8 +103,8 @@ _DRAIN_TIMEOUT = 10.0
 # agent (or a pinned/locally installed adapter).
 _AGENTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "claude": ("npx", ("-y", "@zed-industries/claude-agent-acp")),
-    "gemini": ("gemini", ("--experimental-acp",)),
-    "codex": ("codex-acp", ()),
+    "gemini": ("npx", ("-y", "@google/gemini-cli", "--acp")),
+    "codex": ("npx", ("-y", "@zed-industries/codex-acp")),
 }
 
 

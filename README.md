@@ -45,7 +45,17 @@ ACP already standardizes the editor↔agent side and a dozen agents speak it; a2
 
 - Python 3.13+
 - [uv](https://docs.astral.sh/uv/)
-- An ACP agent adapter for the `acp` backend, launched as a subprocess. The `claude` preset uses `npx @zed-industries/claude-agent-acp` (needs Node and a Claude credential); `gemini` uses the Gemini CLI; or point `--agent-command` at any ACP agent.
+- An ACP agent adapter for the `acp` backend, launched as a subprocess. Every preset launches one with `npx`, so Node is the only prerequisite besides that agent's own credential:
+
+| `--agent` | Launches                            | Credential           |
+| --------- | ----------------------------------- | -------------------- |
+| `claude`  | `@zed-industries/claude-agent-acp`  | Anthropic API key    |
+| `codex`   | `@zed-industries/codex-acp`         | OpenAI credential    |
+| `gemini`  | `@google/gemini-cli --acp`          | Google account (see below) |
+
+Or point `--agent-command` at any other ACP agent.
+
+**On the `gemini` preset:** as of August 2026 Google refuses ACP clients on Gemini Code Assist for individual accounts — the session fails with *"This client is no longer supported for Gemini Code Assist for individuals… migrate to the Antigravity suite"*. That is Google's account tier talking, not a2acode or ACP; the preset is kept because the flag and adapter are still current and other account types may be unaffected.
 
 ## Quick start
 
