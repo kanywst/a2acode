@@ -41,6 +41,7 @@ import asyncio
 import base64
 import logging
 import os
+import re
 import shlex
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import AsyncExitStack, suppress
@@ -97,6 +98,9 @@ _MAX_TERMINALS = 16
 
 # How long a finished turn waits for its trailing notifications to be handled.
 _DRAIN_TIMEOUT = 10.0
+
+# A shell-safe environment variable name, which an agent's need not be.
+_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 # How to launch each known ACP agent adapter as a subprocess. A preset is just a
 # default command; pass an explicit ``command``/``args`` to drive any other ACP
@@ -172,6 +176,27 @@ def select_option(options: Sequence[s.PermissionOption], *, allow: bool) -> str 
 
 def _as_dict(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _command_line(command: str, argv: Sequence[str], env: Mapping[str, str]) -> str:
+    """Render a command the way the caller must judge it: environment included.
+
+    The agent supplies its own variables, and PATH or LD_PRELOAD decide what a
+    plausible-looking command actually executes. Showing the words without them
+    would put an innocuous line in front of the caller and run something else.
+
+    The name is agent-controlled too, so one carrying spaces or quotes is shown
+    as a single quoted token rather than allowed to split into words the caller
+    would read as separate arguments.
+    """
+    assignments = " ".join(
+        f"{name}={shlex.quote(value)}"
+        if _ENV_NAME.fullmatch(name)
+        else shlex.quote(f"{name}={value}")
+        for name, value in sorted(env.items())
+    )
+    line = shlex.join([command, *argv])
+    return f"{assignments} {line}" if assignments else line
 
 
 def prompt_blocks(
@@ -402,14 +427,15 @@ class _BridgeClient(Client):
         **_: Any,
     ) -> s.CreateTerminalResponse:
         argv = list(args or [])
+        environment = {var.name: var.value for var in env or []}
         # Running a command is exactly the kind of act the caller holds the
         # decision on, so it takes the same round trip as any tool. Without this
         # gate, advertising the capability would hand the agent a way around the
         # permission model rather than a safer place to execute.
         decision = await self._approve(
             "Terminal",
-            {"command": command, "args": argv, "cwd": cwd},
-            shlex.join([command, *argv]),
+            {"command": command, "args": argv, "cwd": cwd, "env": environment},
+            _command_line(command, argv, environment),
         )
         if not decision.allow:
             # A protocol error, not a crash: a refusal is a normal outcome, and
@@ -426,7 +452,7 @@ class _BridgeClient(Client):
             command,
             argv,
             cwd=self._safe_path(cwd) if cwd else self._cwd,
-            env={var.name: var.value for var in env or []},
+            env=environment,
             limit=max(limit, 1),
         )
         terminal_id = uuid4().hex
