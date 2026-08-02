@@ -12,6 +12,7 @@ import sys
 
 import pytest
 from acp import schema as s
+from acp.exceptions import RequestError
 
 from a2acode.backends import terminal as terminal_mod
 from a2acode.backends.acp import _BridgeClient
@@ -66,7 +67,7 @@ async def test_a_denied_terminal_never_runs(tmp_path):
     client = _client(session, tmp_path)
     marker = tmp_path / "ran"
 
-    with pytest.raises(PermissionError):
+    with pytest.raises(RequestError):
         await client.create_terminal(
             "sess",
             sys.executable,
@@ -82,7 +83,7 @@ async def test_an_unbound_client_refuses_to_run_anything(tmp_path):
     # Between turns there is no caller to answer, so nothing may execute.
     client = _BridgeClient(None, str(tmp_path))  # type: ignore[abstract]
 
-    with pytest.raises(PermissionError):
+    with pytest.raises(RequestError):
         await client.create_terminal("sess", sys.executable, ["-c", "pass"])
 
 

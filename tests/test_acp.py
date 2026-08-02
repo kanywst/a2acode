@@ -20,6 +20,7 @@ from acp import (
     update_plan,
 )
 from acp import schema as s
+from acp.task import InMemoryMessageQueue
 
 from a2acode.backends import acp as acp_mod
 from a2acode.backends.acp import (
@@ -405,6 +406,7 @@ def _agent(conn=None, *, load_session=False, session_id=None) -> _Agent:
         conn=conn or _FakeConn(),
         process=_FakeProcess(),
         client=_BridgeClient(),
+        queue=InMemoryMessageQueue(),
         capabilities=s.AgentCapabilities(load_session=load_session),
         session_id=session_id,
     )

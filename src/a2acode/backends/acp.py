@@ -57,6 +57,8 @@ from acp import (
     text_block,
 )
 from acp import schema as s
+from acp.exceptions import RequestError
+from acp.task import InMemoryMessageQueue
 
 from .attach import append_to_prompt
 from .base import (
@@ -75,6 +77,7 @@ from .base import (
     ToolUse,
 )
 from .diff import unified_diff
+from .dispatch import OrderedDispatcher
 from .session import BackendSession
 from .terminal import DEFAULT_OUTPUT_LIMIT, MAX_OUTPUT_LIMIT, Terminal, spawn
 
@@ -91,6 +94,9 @@ _MAX_AGENTS = 32
 
 # Terminals an agent may hold open at once within a turn.
 _MAX_TERMINALS = 16
+
+# How long a finished turn waits for its trailing notifications to be handled.
+_DRAIN_TIMEOUT = 10.0
 
 # How to launch each known ACP agent adapter as a subprocess. A preset is just a
 # default command; pass an explicit ``command``/``args`` to drive any other ACP
@@ -404,7 +410,11 @@ class _BridgeClient(Client):
             shlex.join([command, *argv]),
         )
         if not decision.allow:
-            raise PermissionError(decision.message or "terminal denied by A2A caller")
+            # A protocol error, not a crash: a refusal is a normal outcome, and
+            # raising anything else logs a traceback for every denied command.
+            raise RequestError.auth_required(
+                {"reason": decision.message or "terminal denied by the A2A caller"}
+            )
 
         if len(self._terminals) >= _MAX_TERMINALS:
             raise RuntimeError(f"too many open terminals (limit {_MAX_TERMINALS})")
@@ -482,6 +492,7 @@ class _Agent:
     conn: Any
     process: Any
     client: _BridgeClient
+    queue: Any
     capabilities: s.AgentCapabilities | None
     session_id: str | None = None
     pooled: bool = True
@@ -589,6 +600,12 @@ class ACPBackend:
             prompt=prompt_blocks(request, agent.capabilities),
             session_id=session_id,
         )
+        # A prompt's reply is handled inline by the receive loop while the
+        # session/update notifications it interleaved go through the dispatch
+        # queue. Without waiting, the turn ends while the agent's last words are
+        # still in flight and they are lost behind the end-of-stream sentinel.
+        with suppress(TimeoutError):
+            await asyncio.wait_for(agent.queue.join(), _DRAIN_TIMEOUT)
         await session.emit(
             Result(
                 session_id=session_id,
@@ -648,10 +665,19 @@ class ACPBackend:
         # scoped ignore.
         client = _BridgeClient(cwd=self.cwd)  # type: ignore[abstract]
         stack = AsyncExitStack()
+        # Our own queue and dispatcher, so a turn can wait for the agent's
+        # updates to have actually become events. See dispatch.py and _run_turn.
+        queue = InMemoryMessageQueue()
         try:
             conn, process = await stack.enter_async_context(
                 spawn_agent_process(
-                    client, self.command, *self.args, env=self.env, cwd=self.cwd
+                    client,
+                    self.command,
+                    *self.args,
+                    env=self.env,
+                    cwd=self.cwd,
+                    queue=queue,
+                    dispatcher_factory=OrderedDispatcher,
                 )
             )
             init = await conn.initialize(
@@ -671,6 +697,7 @@ class ACPBackend:
             conn=conn,
             process=process,
             client=client,
+            queue=queue,
             capabilities=init.agent_capabilities,
         )
 
