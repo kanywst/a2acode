@@ -165,6 +165,15 @@ The same gate covers commands. a2acode serves ACP's terminal capability, so an a
 
 The agent card advertises push notifications. A caller can register a webhook for a task and receive status and artifact updates by HTTP POST instead of holding a stream open, which helps when a run takes minutes. Streaming and polling (`tasks/get`) both work too.
 
+Tasks live in memory by default, so a restart loses their history and any webhook registrations. Point `--task-db` at a database to keep them:
+
+```bash
+uv sync --extra persistence
+uv run a2acode serve --task-db "sqlite+aiosqlite:///a2acode.db"
+```
+
+Any SQLAlchemy async DSN works; the extra ships the SQLite driver because it needs no server. What survives is task history, artifacts, and push registrations — **not** a live agent session, which is a process and dies with the server either way, so a task paused on a permission cannot be answered after a restart.
+
 ## Observability
 
 Debugging one agent is hard; debugging a chain of them without traces is worse. Because A2A runs over HTTP, it drops straight into OpenTelemetry: install the extra and the A2A SDK's instrumentation plus a per-task `a2acode.execute` span light up, with W3C trace context propagating across the call so client and server spans share one trace.

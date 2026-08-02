@@ -109,6 +109,12 @@ def serve(
         help="Path to a file holding a bearer token. When set, callers must "
         "send 'Authorization: Bearer <token>' and the card advertises it.",
     ),
+    task_db: str = typer.Option(
+        None,
+        help="SQLAlchemy async DSN for persisting tasks and push-notification "
+        "registrations across restarts (e.g. sqlite+aiosqlite:///a2acode.db). "
+        "Needs the 'persistence' extra. Omit to keep them in memory.",
+    ),
 ) -> None:
     """Start the A2A server."""
     from pathlib import Path
@@ -166,13 +172,23 @@ def serve(
         if not auth_token:
             raise typer.BadParameter("--auth-token-file is empty")
 
-    asgi_app = build_app(
-        drv,
-        url=_local_url(host, port),
-        card_name=card_name,
-        card_signer=card_signer,
-        auth_token=auth_token,
-    )
+    try:
+        asgi_app = build_app(
+            drv,
+            url=_local_url(host, port),
+            card_name=card_name,
+            card_signer=card_signer,
+            auth_token=auth_token,
+            task_db=task_db,
+        )
+    except ImportError as e:  # the persistence extra is not installed
+        raise typer.BadParameter(
+            f"--task-db needs the persistence extra (uv sync --extra persistence): {e}"
+        ) from e
+    except Exception as e:  # an unusable DSN, caught before the server is up
+        if not task_db:
+            raise
+        raise typer.BadParameter(f"invalid --task-db: {e}") from e
     label = f"{backend}:{agent}" if backend == "acp" else backend
     typer.echo(f"a2acode: backend={label} card={_local_url(host, port)}")
     uvicorn.run(asgi_app, host=host, port=port, log_level="info")

@@ -24,6 +24,10 @@ claude = ["claude-agent-sdk>=0.2.101"]
 # the API a2acode's own spans import directly (declared rather than relied on
 # transitively through the SDK). Install with `a2acode[telemetry]`.
 telemetry = ["a2a-sdk[telemetry]>=1.1,<2", "opentelemetry-api>=1.33"]
+# Persistent task storage (`--task-db`). Ships the SQLite driver because it
+# needs no server; point the DSN at Postgres or MySQL and add that driver
+# instead (the A2A SDK's `postgresql` / `mysql` extras).
+persistence = ["a2a-sdk[sqlite]>=1.1,<2"]
 
 [project.scripts]
 a2acode = "a2acode.cli:app"
@@ -42,6 +46,8 @@ dev = [
     # The Claude SDK backend is an optional extra; pull it in for dev so its
     # tests (test_claude_backend.py) run.
     "claude-agent-sdk>=0.2.101",
+    # So the persistent task store is exercised against a real database.
+    "a2a-sdk[sqlite]>=1.1,<2",
 ]
 
 [build-system]
