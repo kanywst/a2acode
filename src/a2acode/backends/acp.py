@@ -174,6 +174,20 @@ def _as_dict(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
+def _command_line(command: str, argv: Sequence[str], env: Mapping[str, str]) -> str:
+    """Render a command the way the caller must judge it: environment included.
+
+    The agent supplies its own variables, and PATH or LD_PRELOAD decide what a
+    plausible-looking command actually executes. Showing the words without them
+    would put an innocuous line in front of the caller and run something else.
+    """
+    assignments = " ".join(
+        f"{name}={shlex.quote(value)}" for name, value in sorted(env.items())
+    )
+    line = shlex.join([command, *argv])
+    return f"{assignments} {line}" if assignments else line
+
+
 def prompt_blocks(
     request: RunRequest, capabilities: s.AgentCapabilities | None
 ) -> list[Any]:
@@ -402,14 +416,15 @@ class _BridgeClient(Client):
         **_: Any,
     ) -> s.CreateTerminalResponse:
         argv = list(args or [])
+        environment = {var.name: var.value for var in env or []}
         # Running a command is exactly the kind of act the caller holds the
         # decision on, so it takes the same round trip as any tool. Without this
         # gate, advertising the capability would hand the agent a way around the
         # permission model rather than a safer place to execute.
         decision = await self._approve(
             "Terminal",
-            {"command": command, "args": argv, "cwd": cwd},
-            shlex.join([command, *argv]),
+            {"command": command, "args": argv, "cwd": cwd, "env": environment},
+            _command_line(command, argv, environment),
         )
         if not decision.allow:
             # A protocol error, not a crash: a refusal is a normal outcome, and
@@ -426,7 +441,7 @@ class _BridgeClient(Client):
             command,
             argv,
             cwd=self._safe_path(cwd) if cwd else self._cwd,
-            env={var.name: var.value for var in env or []},
+            env=environment,
             limit=max(limit, 1),
         )
         terminal_id = uuid4().hex
