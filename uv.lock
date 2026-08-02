@@ -45,7 +45,7 @@ telemetry = [
 
 [[package]]
 name = "a2acode"
-version = "0.5.0"
+version = "0.6.0"
 source = { editable = "." }
 dependencies = [
     { name = "a2a-sdk", extra = ["http-server", "signing"] },
