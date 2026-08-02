@@ -62,6 +62,34 @@ def _validate_permission_mode(value: str | None) -> None:
         )
 
 
+def _check_task_db(dsn: str) -> None:
+    """Open the database once, so a bad DSN fails here rather than at startup.
+
+    ``build_app`` only builds the engine; the schema is created during the ASGI
+    lifespan, which would surface a refused connection as a traceback out of
+    uvicorn long after the flag was accepted.
+    """
+    try:
+        from sqlalchemy.ext.asyncio import create_async_engine
+    except ImportError as e:
+        raise typer.BadParameter(
+            f"--task-db needs the persistence extra (uv sync --extra persistence): {e}"
+        ) from e
+
+    async def _connect() -> None:
+        engine = create_async_engine(dsn)
+        try:
+            async with engine.connect():
+                pass
+        finally:
+            await engine.dispose()
+
+    try:
+        asyncio.run(_connect())
+    except Exception as e:
+        raise typer.BadParameter(f"invalid --task-db: {e}") from e
+
+
 def _local_url(host: str, port: int) -> str:
     shown = "localhost" if host in ("0.0.0.0", "::") else host
     return f"http://{shown}:{port}/"
@@ -77,7 +105,7 @@ def serve(
         help="ACP agent the 'acp' backend fronts: 'claude', 'gemini', 'codex', "
         "or any agent reachable via --agent-command.",
     ),
-    agent_command: str = typer.Option(
+    agent_command: str | None = typer.Option(
         None,
         help="Explicit launch command for an ACP agent, overriding --agent's "
         "preset (e.g. 'npx -y @zed-industries/claude-agent-acp').",
@@ -85,29 +113,35 @@ def serve(
     cwd: str = typer.Option(".", help="Project directory the coding agent works in."),
     host: str = typer.Option("127.0.0.1"),
     port: int = typer.Option(9100),
-    permission_mode: str = typer.Option(
+    permission_mode: str | None = typer.Option(
         None,
         help="Claude permission mode (e.g. acceptEdits). Omit to use defaults.",
     ),
-    max_budget_usd: float = typer.Option(
+    max_budget_usd: float | None = typer.Option(
         None, help="Hard cost ceiling per run, in USD."
     ),
-    sign_key: str = typer.Option(
+    sign_key: str | None = typer.Option(
         None,
         help="Path to a file holding the signing key (a PEM private key, or a "
         "shared secret for HS256) used to sign the agent card so callers can "
         "verify who issued it.",
     ),
-    sign_kid: str = typer.Option(
+    sign_kid: str | None = typer.Option(
         None, help="Key id (kid) recorded in the card signature."
     ),
     sign_alg: str = typer.Option(
         "ES256", help="JWS algorithm for the card signature (e.g. ES256, RS256)."
     ),
-    auth_token_file: str = typer.Option(
+    auth_token_file: str | None = typer.Option(
         None,
         help="Path to a file holding a bearer token. When set, callers must "
         "send 'Authorization: Bearer <token>' and the card advertises it.",
+    ),
+    task_db: str | None = typer.Option(
+        None,
+        help="SQLAlchemy async DSN for persisting tasks and push-notification "
+        "registrations across restarts (e.g. sqlite+aiosqlite:///a2acode.db). "
+        "Needs the 'persistence' extra. Omit to keep them in memory.",
     ),
 ) -> None:
     """Start the A2A server."""
@@ -166,12 +200,16 @@ def serve(
         if not auth_token:
             raise typer.BadParameter("--auth-token-file is empty")
 
+    if task_db:
+        _check_task_db(task_db)
+
     asgi_app = build_app(
         drv,
         url=_local_url(host, port),
         card_name=card_name,
         card_signer=card_signer,
         auth_token=auth_token,
+        task_db=task_db,
     )
     label = f"{backend}:{agent}" if backend == "acp" else backend
     typer.echo(f"a2acode: backend={label} card={_local_url(host, port)}")
@@ -182,8 +220,10 @@ def serve(
 def call(
     text: str = typer.Argument(..., help="Message to send to the agent."),
     url: str = typer.Option("http://localhost:9100/", help="Server URL."),
-    context: str = typer.Option(None, help="contextId to continue a conversation."),
-    task: str = typer.Option(
+    context: str | None = typer.Option(
+        None, help="contextId to continue a conversation."
+    ),
+    task: str | None = typer.Option(
         None, help="taskId to answer an input-required prompt (e.g. 'allow')."
     ),
 ) -> None:
@@ -202,6 +242,10 @@ def card(url: str = typer.Option("http://localhost:9100/")) -> None:
 
 def _parts_text(parts) -> str:
     return "".join(p.text for p in parts if p.text)
+
+
+def _indent(text: str) -> str:
+    return "\n".join(f"  {line}" for line in text.splitlines())
 
 
 def _state_name(state) -> str:
@@ -256,9 +300,19 @@ async def _call(text: str, url: str, context: str | None, task: str | None) -> N
                         meta = _format_meta(s.message) if s.message else ""
                         typer.echo(f"[{state}] {meta}".rstrip())
                 elif which == "artifact_update":
-                    streaming = True
-                    parts = event.artifact_update.artifact.parts
-                    typer.echo(_parts_text(parts), nl=False)
+                    artifact = event.artifact_update.artifact
+                    text = _parts_text(artifact.parts)
+                    if artifact.name == "response":
+                        streaming = True
+                        typer.echo(text, nl=False)
+                    elif text:
+                        # Plans, reasoning, and diffs are their own artifacts;
+                        # labelling them keeps them out of the answer's stream.
+                        if streaming:
+                            typer.echo("")
+                            streaming = False
+                        typer.echo(f"  [{artifact.name}]")
+                        typer.echo(_indent(text.rstrip()))
                 elif which == "message":
                     typer.echo(_parts_text(event.message.parts))
         finally:

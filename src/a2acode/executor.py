@@ -3,6 +3,7 @@
 Translates a backend's normalized event stream into A2A task lifecycle events:
 
     text                -> a streamed artifact (append / last_chunk)
+    thought             -> a separate "thinking" artifact, never the answer
     tool use            -> a working-state status update describing the action
     tool result         -> a working-state status update carrying the outcome
     file change         -> a named artifact carrying the diff
@@ -41,6 +42,7 @@ from .backends.base import (
     Result,
     RunRequest,
     TextDelta,
+    Thought,
     ToolResult,
     ToolUse,
 )
@@ -98,6 +100,9 @@ class _Stream:
     tool_names: dict[str, str] = field(default_factory=dict)
     # Reused so each plan update replaces the last instead of stacking a copy.
     plan_artifact_id: str = ""
+    # Reasoning streams into its own artifact, never into the answer.
+    thinking_artifact_id: str = ""
+    sent_thought: bool = False
 
 
 def _is_textual(media_type: str) -> bool:
@@ -205,7 +210,9 @@ def _describe_tool(event: ToolUse) -> str:
     if event.name == "Bash":
         return f"$ {str(i.get('command', '')).strip()[:120]}"
     path = i.get("file_path") or i.get("path") or i.get("pattern")
-    if path:
+    # ACP names a tool call with a human title that often already says the path
+    # ("Write calc.py"); appending it again reads as a stutter.
+    if path and str(path) not in event.name:
         return f"{event.name} {path}"
     return event.name
 
@@ -228,6 +235,10 @@ def _render_plan(plan: Plan) -> str:
     ``in_progress`` gets its own marker: which step the agent is on is the
     reason to watch a plan at all.
     """
+    if plan.markdown:
+        return plan.markdown
+    if plan.uri:
+        return f"The agent keeps its plan in {plan.uri}\n"
     lines = []
     for step in plan.steps:
         mark = _PLAN_MARKS.get(step.status, " ")
@@ -362,19 +373,26 @@ class ClaudeCodeExecutor(AgentExecutor):
                         TaskState.TASK_STATE_WORKING,
                         message=updater.new_agent_message([Part(text=event.text)]),
                     )
+                elif isinstance(event, Thought):
+                    if not stream.thinking_artifact_id:
+                        stream.thinking_artifact_id = uuid4().hex
+                    await updater.add_artifact(
+                        [Part(text=event.text)],
+                        artifact_id=stream.thinking_artifact_id,
+                        name="thinking",
+                        append=stream.sent_thought,
+                        last_chunk=False,
+                    )
+                    stream.sent_thought = True
                 elif isinstance(event, Plan):
+                    body = _render_plan(event)
                     # An emptied plan still replaces the artifact, or the caller
                     # would keep seeing a checklist the agent has abandoned.
-                    if event.steps or stream.plan_artifact_id:
+                    if body or stream.plan_artifact_id:
                         if not stream.plan_artifact_id:
                             stream.plan_artifact_id = uuid4().hex
                         await updater.add_artifact(
-                            [
-                                Part(
-                                    text=_render_plan(event),
-                                    media_type="text/markdown",
-                                )
-                            ],
+                            [Part(text=body, media_type="text/markdown")],
                             artifact_id=stream.plan_artifact_id,
                             name="plan",
                             append=False,
@@ -422,6 +440,17 @@ class ClaudeCodeExecutor(AgentExecutor):
                 )
             )
             return
+
+        if stream.sent_thought:
+            # Close it too, or a consumer waiting for a final chunk holds the
+            # thinking artifact open past the end of the task.
+            await updater.add_artifact(
+                [Part(text="")],
+                artifact_id=stream.thinking_artifact_id,
+                name="thinking",
+                append=True,
+                last_chunk=True,
+            )
 
         if stream.pending is not None:
             stream.chunks.append(stream.pending)
@@ -525,4 +554,6 @@ class ClaudeCodeExecutor(AgentExecutor):
             meta["num_turns"] = event.num_turns
         if event.usage is not None:
             meta["usage"] = event.usage
+        if event.stop_reason is not None:
+            meta["stop_reason"] = event.stop_reason
         return meta

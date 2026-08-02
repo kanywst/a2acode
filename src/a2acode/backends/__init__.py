@@ -14,6 +14,7 @@ from .base import (
     Result,
     RunRequest,
     TextDelta,
+    Thought,
     ToolResult,
     ToolUse,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "Result",
     "RunRequest",
     "TextDelta",
+    "Thought",
     "ToolResult",
     "ToolUse",
     "EchoBackend",

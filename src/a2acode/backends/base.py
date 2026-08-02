@@ -59,6 +59,13 @@ class FileChange:
 
 
 @dataclass(slots=True)
+class Thought:
+    """A chunk of the agent's reasoning, distinct from its answer."""
+
+    text: str
+
+
+@dataclass(slots=True)
 class PlanStep:
     """One entry in the agent's plan."""
 
@@ -72,10 +79,14 @@ class Plan:
     """The agent's current plan for the turn.
 
     Reported by replacement rather than by delta, so a consumer renders the
-    latest one instead of accumulating them.
+    latest one instead of accumulating them. A plan is either a step list, free
+    markdown, or a pointer to a file the agent keeps it in — whichever the agent
+    chose; the other fields stay empty.
     """
 
-    steps: list[PlanStep]
+    steps: list[PlanStep] = field(default_factory=list)
+    markdown: str = ""
+    uri: str = ""
 
 
 @dataclass(slots=True)
@@ -111,16 +122,23 @@ class PermissionDecision:
 
 @dataclass(slots=True)
 class Result:
-    """Terminal event carrying run metadata."""
+    """Terminal event carrying run metadata.
+
+    ``stop_reason`` is why the turn ended — completed normally, hit a token or
+    request ceiling, was refused, was cancelled — which a caller needs to tell a
+    finished answer from a truncated one.
+    """
 
     session_id: str | None = None
     cost_usd: float | None = None
     num_turns: int | None = None
     usage: dict[str, Any] | None = None
+    stop_reason: str | None = None
 
 
 BackendEvent = (
     TextDelta
+    | Thought
     | ToolUse
     | ToolResult
     | FileChange

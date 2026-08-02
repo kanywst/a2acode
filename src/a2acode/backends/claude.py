@@ -31,6 +31,7 @@ from claude_agent_sdk import (
     ResultMessage,
     SettingSource,
     TextBlock,
+    ThinkingBlock,
     ToolResultBlock,
     ToolUseBlock,
     UserMessage,
@@ -44,6 +45,7 @@ from .base import (
     Result,
     RunRequest,
     TextDelta,
+    Thought,
     ToolResult,
     ToolUse,
 )
@@ -69,6 +71,9 @@ def events_from_message(message: object) -> Iterator[BackendEvent]:
             if isinstance(block, TextBlock):
                 if block.text:
                     yield TextDelta(text=block.text)
+            elif isinstance(block, ThinkingBlock):
+                if block.thinking:
+                    yield Thought(text=block.thinking)
             elif isinstance(block, ToolUseBlock):
                 tool_input = dict(block.input or {})
                 yield ToolUse(block.name, tool_input, block.id)

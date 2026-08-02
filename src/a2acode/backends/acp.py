@@ -10,11 +10,13 @@ a new backend.
 ACP maps almost one-to-one onto the backend event vocabulary:
 
     agent_message_chunk          -> TextDelta
+    agent_thought_chunk          -> Thought (kept out of the answer text)
     tool_call / tool_call_update -> ToolUse (+ FileChange for diff content)
     a terminal tool_call status  -> ToolResult (completed / failed, with output)
-    plan / plan_content_update   -> Plan (the agent's task list, by replacement)
+    plan / plan_update           -> Plan (the agent's task list, by replacement)
+    current_mode / session_info  -> Notice
     session/request_permission   -> PermissionRequest (the input-required pause)
-    PromptResponse usage + cost  -> Result
+    PromptResponse + cost        -> Result (usage, cost, stop reason)
 
 The permission round trip lands exactly on the session seam: the agent calls
 back into the client's ``request_permission``, which awaits
@@ -39,11 +41,13 @@ import asyncio
 import base64
 import logging
 import os
+import shlex
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import AsyncExitStack, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from acp import (
     PROTOCOL_VERSION,
@@ -53,6 +57,8 @@ from acp import (
     text_block,
 )
 from acp import schema as s
+from acp.exceptions import RequestError
+from acp.task import InMemoryMessageQueue
 
 from .attach import append_to_prompt
 from .base import (
@@ -60,16 +66,20 @@ from .base import (
     BackendEvent,
     FileChange,
     Notice,
+    PermissionDecision,
     Plan,
     PlanStep,
     Result,
     RunRequest,
     TextDelta,
+    Thought,
     ToolResult,
     ToolUse,
 )
 from .diff import unified_diff
+from .dispatch import OrderedDispatcher
 from .session import BackendSession
+from .terminal import DEFAULT_OUTPUT_LIMIT, MAX_OUTPUT_LIMIT, Terminal, spawn
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +91,12 @@ _MAX_TOOL_OUTPUT = 2000
 # process holding a real conversation, so this bounds memory and file handles
 # the way the executor's own maps bound sessions.
 _MAX_AGENTS = 32
+
+# Terminals an agent may hold open at once within a turn.
+_MAX_TERMINALS = 16
+
+# How long a finished turn waits for its trailing notifications to be handled.
+_DRAIN_TIMEOUT = 10.0
 
 # How to launch each known ACP agent adapter as a subprocess. A preset is just a
 # default command; pass an explicit ``command``/``args`` to drive any other ACP
@@ -103,6 +119,10 @@ def events_from_update(update: object) -> Iterator[BackendEvent]:
         text = getattr(update.content, "text", None)
         if text:
             yield TextDelta(text=text)
+    elif isinstance(update, s.AgentThoughtChunk):
+        text = getattr(update.content, "text", None)
+        if text:
+            yield Thought(text=text)
     elif isinstance(update, s.ToolCallStart):
         yield ToolUse(
             name=update.title or (update.kind or "tool"),
@@ -117,13 +137,14 @@ def events_from_update(update: object) -> Iterator[BackendEvent]:
         yield from _file_changes(update.content)
         yield from _tool_results(update)
     elif isinstance(update, s.AgentPlanUpdate):
-        yield _plan(update.entries)
+        yield Plan(steps=_steps(update.entries))
     elif isinstance(update, s.AgentPlanContentUpdate):
-        # The newer plan surface is a union; only the ``items`` variant carries
-        # per-entry status. The markdown and file variants are prose, so they
-        # are left alone rather than flattened into steps with invented states.
-        if isinstance(update.plan, s.PlanUpdateItems):
-            yield _plan(update.plan.entries)
+        yield _plan_content(update.plan)
+    elif isinstance(update, s.CurrentModeUpdate):
+        yield Notice(text=f"the agent switched to {update.current_mode_id} mode")
+    elif isinstance(update, s.SessionInfoUpdate):
+        if update.title:
+            yield Notice(text=f"the agent titled this session {update.title!r}")
 
 
 def select_option(options: Sequence[s.PermissionOption], *, allow: bool) -> str | None:
@@ -182,17 +203,31 @@ def prompt_blocks(
     return [text_block(append_to_prompt(request.prompt, inlined)), *images]
 
 
-def _plan(entries: Sequence[s.PlanEntry]) -> Plan:
-    return Plan(
-        steps=[
-            PlanStep(
-                content=entry.content,
-                status=entry.status,
-                priority=entry.priority or "",
-            )
-            for entry in entries
-        ]
-    )
+def _plan_content(plan: object) -> Plan:
+    """Map the plan-content union onto one Plan.
+
+    Only the ``items`` variant carries per-entry status; the other two are the
+    agent's own prose or a file it keeps the plan in, carried as-is rather than
+    flattened into steps with invented states.
+    """
+    if isinstance(plan, s.PlanUpdateItems):
+        return Plan(steps=_steps(plan.entries))
+    if isinstance(plan, s.PlanUpdateMarkdown):
+        return Plan(markdown=plan.content)
+    if isinstance(plan, s.PlanUpdateFile):
+        return Plan(uri=plan.uri)
+    return Plan()
+
+
+def _steps(entries: Sequence[s.PlanEntry]) -> list[PlanStep]:
+    return [
+        PlanStep(
+            content=entry.content,
+            status=entry.status,
+            priority=entry.priority or "",
+        )
+        for entry in entries
+    ]
 
 
 def _tool_results(update: s.ToolCallStart | s.ToolCallProgress) -> Iterator[ToolResult]:
@@ -253,14 +288,33 @@ class _BridgeClient(Client):
         # we advertise. ACP paths are absolute, but we still contain them.
         self._cwd = Path(cwd).resolve()
         self.cost_usd: float | None = None
+        self._terminals: dict[str, Terminal] = {}
 
     def bind(self, session: BackendSession) -> None:
         """Route this connection's output to ``session`` for one turn."""
         self._session = session
         self.cost_usd = None
 
-    def unbind(self) -> None:
+    async def unbind(self) -> None:
         self._session = None
+        # Terminals belong to the turn that opened them. An agent is meant to
+        # release its own, but a crashed or cancelled one would otherwise leave
+        # processes running on the server with nobody to reap them.
+        terminals, self._terminals = list(self._terminals.values()), {}
+        # Concurrently: each close waits on a process that may not die promptly,
+        # and this runs inside the turn's lock, holding up the next one.
+        await asyncio.gather(*(t.close() for t in terminals), return_exceptions=True)
+
+    async def _approve(
+        self, name: str, tool_input: dict[str, Any], description: str
+    ) -> PermissionDecision:
+        """Put an action to the A2A caller, denying if nobody can answer."""
+        if self._session is None:
+            # Between turns: approving would act with nobody watching.
+            return PermissionDecision(
+                request_id="", allow=False, message="no caller attached"
+            )
+        return await self._session.request_permission(name, tool_input, description)
 
     def _safe_path(self, path: str) -> Path:
         target = Path(path)
@@ -286,16 +340,8 @@ class _BridgeClient(Client):
         options: list[s.PermissionOption],
         **_: Any,
     ) -> s.RequestPermissionResponse:
-        if self._session is None:
-            # No turn in flight, so no caller could answer; approving would run
-            # a tool nobody asked for and nobody is watching.
-            return s.RequestPermissionResponse(
-                outcome=s.DeniedOutcome(outcome="cancelled")
-            )
         name = tool_call.title or (tool_call.kind or "tool")
-        decision = await self._session.request_permission(
-            name, _as_dict(tool_call.raw_input), name
-        )
+        decision = await self._approve(name, _as_dict(tool_call.raw_input), name)
         option_id = select_option(options, allow=decision.allow)
         if option_id is None:
             # The agent offered no option of the requested polarity; cancelling
@@ -344,6 +390,87 @@ class _BridgeClient(Client):
         text = await asyncio.to_thread(_read)
         return s.ReadTextFileResponse(content=text)
 
+    async def create_terminal(
+        self,
+        session_id: str,
+        command: str,
+        args: list[str] | None = None,
+        env: list[s.EnvVariable] | None = None,
+        cwd: str | None = None,
+        output_byte_limit: int | None = None,
+        **_: Any,
+    ) -> s.CreateTerminalResponse:
+        argv = list(args or [])
+        # Running a command is exactly the kind of act the caller holds the
+        # decision on, so it takes the same round trip as any tool. Without this
+        # gate, advertising the capability would hand the agent a way around the
+        # permission model rather than a safer place to execute.
+        decision = await self._approve(
+            "Terminal",
+            {"command": command, "args": argv, "cwd": cwd},
+            shlex.join([command, *argv]),
+        )
+        if not decision.allow:
+            # A protocol error, not a crash: a refusal is a normal outcome, and
+            # raising anything else logs a traceback for every denied command.
+            raise RequestError.auth_required(
+                {"reason": decision.message or "terminal denied by the A2A caller"}
+            )
+
+        if len(self._terminals) >= _MAX_TERMINALS:
+            raise RuntimeError(f"too many open terminals (limit {_MAX_TERMINALS})")
+
+        limit = min(output_byte_limit or DEFAULT_OUTPUT_LIMIT, MAX_OUTPUT_LIMIT)
+        terminal = await spawn(
+            command,
+            argv,
+            cwd=self._safe_path(cwd) if cwd else self._cwd,
+            env={var.name: var.value for var in env or []},
+            limit=max(limit, 1),
+        )
+        terminal_id = uuid4().hex
+        self._terminals[terminal_id] = terminal
+        return s.CreateTerminalResponse(terminal_id=terminal_id)
+
+    async def terminal_output(
+        self, session_id: str, terminal_id: str, **_: Any
+    ) -> s.TerminalOutputResponse:
+        terminal = self._terminal(terminal_id)
+        status = terminal.exit_status()
+        return s.TerminalOutputResponse(
+            output=terminal.output,
+            truncated=terminal.truncated,
+            exit_status=None
+            if status is None
+            else s.TerminalExitStatus(exit_code=status[0], signal=status[1]),
+        )
+
+    async def wait_for_terminal_exit(
+        self, session_id: str, terminal_id: str, **_: Any
+    ) -> s.WaitForTerminalExitResponse:
+        exit_code, signal = await self._terminal(terminal_id).wait()
+        return s.WaitForTerminalExitResponse(exit_code=exit_code, signal=signal)
+
+    async def kill_terminal(
+        self, session_id: str, terminal_id: str, **_: Any
+    ) -> s.KillTerminalResponse | None:
+        await self._terminal(terminal_id).kill()
+        return s.KillTerminalResponse()
+
+    async def release_terminal(
+        self, session_id: str, terminal_id: str, **_: Any
+    ) -> s.ReleaseTerminalResponse | None:
+        terminal = self._terminals.pop(terminal_id, None)
+        if terminal is not None:
+            await terminal.close()
+        return s.ReleaseTerminalResponse()
+
+    def _terminal(self, terminal_id: str) -> Terminal:
+        terminal = self._terminals.get(terminal_id)
+        if terminal is None:
+            raise ValueError(f"unknown terminal {terminal_id!r}")
+        return terminal
+
     async def write_text_file(
         self, session_id: str, path: str, content: str, **_: Any
     ) -> s.WriteTextFileResponse | None:
@@ -366,6 +493,7 @@ class _Agent:
     conn: Any
     process: Any
     client: _BridgeClient
+    queue: Any
     capabilities: s.AgentCapabilities | None
     session_id: str | None = None
     pooled: bool = True
@@ -446,7 +574,7 @@ class ACPBackend:
                     agent.broken = True
                     raise
                 finally:
-                    agent.client.unbind()
+                    await agent.client.unbind()
         finally:
             # Outside the lock: a turn cancelled while queued behind another
             # never takes it, and must still give the claim back.
@@ -473,13 +601,20 @@ class ACPBackend:
             prompt=prompt_blocks(request, agent.capabilities),
             session_id=session_id,
         )
-        usage = response.usage.model_dump() if response.usage else None
+        # A prompt's reply is handled inline by the receive loop while the
+        # session/update notifications it interleaved go through the dispatch
+        # queue. Without waiting, the turn ends while the agent's last words are
+        # still in flight and they are lost behind the end-of-stream sentinel.
+        with suppress(TimeoutError):
+            await asyncio.wait_for(agent.queue.join(), _DRAIN_TIMEOUT)
         await session.emit(
             Result(
                 session_id=session_id,
                 cost_usd=agent.client.cost_usd,
+                # ACP reports no turn count; its usage is token-based.
                 num_turns=None,
-                usage=usage,
+                usage=response.usage.model_dump() if response.usage else None,
+                stop_reason=response.stop_reason,
             )
         )
 
@@ -531,10 +666,19 @@ class ACPBackend:
         # scoped ignore.
         client = _BridgeClient(cwd=self.cwd)  # type: ignore[abstract]
         stack = AsyncExitStack()
+        # Our own queue and dispatcher, so a turn can wait for the agent's
+        # updates to have actually become events. See dispatch.py and _run_turn.
+        queue = InMemoryMessageQueue()
         try:
             conn, process = await stack.enter_async_context(
                 spawn_agent_process(
-                    client, self.command, *self.args, env=self.env, cwd=self.cwd
+                    client,
+                    self.command,
+                    *self.args,
+                    env=self.env,
+                    cwd=self.cwd,
+                    queue=queue,
+                    dispatcher_factory=OrderedDispatcher,
                 )
             )
             init = await conn.initialize(
@@ -542,7 +686,8 @@ class ACPBackend:
                 client_capabilities=s.ClientCapabilities(
                     fs=s.FileSystemCapabilities(
                         read_text_file=True, write_text_file=True
-                    )
+                    ),
+                    terminal=True,
                 ),
             )
         except BaseException:
@@ -553,6 +698,7 @@ class ACPBackend:
             conn=conn,
             process=process,
             client=client,
+            queue=queue,
             capabilities=init.agent_capabilities,
         )
 

@@ -6,6 +6,7 @@ from claude_agent_sdk import (
     AssistantMessage,
     ResultMessage,
     TextBlock,
+    ThinkingBlock,
     ToolResultBlock,
     ToolUseBlock,
     UserMessage,
@@ -17,6 +18,7 @@ from a2acode.backends.base import (
     Result,
     RunRequest,
     TextDelta,
+    Thought,
     ToolResult,
     ToolUse,
 )
@@ -131,6 +133,20 @@ def test_malformed_todos_do_not_raise():
             model="claude-test",
         )
         assert [type(e) for e in events_from_message(message)] == [ToolUse]
+
+
+def test_thinking_block_maps_to_a_thought():
+    message = AssistantMessage(
+        content=[
+            ThinkingBlock(thinking="weighing two options", signature="sig"),
+            TextBlock(text="going with the second"),
+        ],
+        model="claude-test",
+    )
+    events = list(events_from_message(message))
+
+    assert [type(e) for e in events] == [Thought, TextDelta]
+    assert events[0].text == "weighing two options"
 
 
 def test_plain_text_user_message_yields_nothing():

@@ -18,12 +18,13 @@ Most adapters that put a coding agent behind A2A flatten everything to text in, 
 | The coding agent produces   | A2A surface it lands on                            |
 | --------------------------- | -------------------------------------------------- |
 | Assistant text              | A streamed artifact (`append` / `last_chunk`)      |
+| Its reasoning               | A separate `thinking` artifact, never the answer   |
 | A tool call (Bash, Edit)    | A `working` status update for the action           |
 | That tool's outcome         | A `working` status update: `✓ Bash` / `✗ Bash: …`  |
 | Its plan for the turn       | A `plan` artifact, replaced as steps progress      |
 | A file edit (diff)          | A named artifact carrying the diff                 |
 | A permission request        | An `input-required` pause the caller answers       |
-| Run result                  | Cost, turns, and usage on the completion message   |
+| Run result                  | Cost, turns, usage, stop reason on the completion  |
 | Session id                  | Mapped to the A2A `contextId` so follow-ups resume |
 
 The mapping is all in `executor.py`. Backends only emit normalized events; they never touch the protocol.
@@ -158,9 +159,20 @@ uv run a2acode call "allow" --task <id> --context <id>
 
 Whatever the agent decides needs approval becomes an `input-required` pause rather than being silently skipped or auto-approved; the caller, not the server, holds the decision. Read-only actions the agent already treats as safe still run without a prompt.
 
+The same gate covers commands. a2acode serves ACP's terminal capability, so an agent can run a build or a test suite through the server instead of shelling out on its own — and every one of those goes through the caller for approval first, starts inside the workspace, has its output bounded, and is killed with the turn. Accepting that delegation is only safe because of the gate; without it, advertising the capability would hand the agent a way around the permission model rather than a safer place to execute.
+
 ## Long-running tasks
 
 The agent card advertises push notifications. A caller can register a webhook for a task and receive status and artifact updates by HTTP POST instead of holding a stream open, which helps when a run takes minutes. Streaming and polling (`tasks/get`) both work too.
+
+Tasks live in memory by default, so a restart loses their history and any webhook registrations. Point `--task-db` at a database to keep them:
+
+```bash
+uv sync --extra persistence
+uv run a2acode serve --task-db "sqlite+aiosqlite:///a2acode.db"
+```
+
+Any SQLAlchemy async DSN works; the extra ships the SQLite driver because it needs no server. What survives is task history, artifacts, and push registrations — **not** a live agent session, which is a process and dies with the server either way, so a task paused on a permission cannot be answered after a restart.
 
 ## Observability
 

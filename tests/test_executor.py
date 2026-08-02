@@ -9,6 +9,8 @@ from a2acode.backends import (
     Plan,
     PlanStep,
     RunRequest,
+    TextDelta,
+    Thought,
     ToolResult,
     ToolUse,
     make_backend,
@@ -166,6 +168,17 @@ async def test_pump_reports_a_failure_with_its_first_line():
     assert updater.status_lines[-1] == "✗ Bash: command not found"
 
 
+async def test_pump_does_not_repeat_a_path_the_tool_name_already_carries():
+    updater = await _pump_events(
+        # ACP titles a tool call for a human, so the path is often in the name.
+        ToolUse(
+            name="Write calc.py", tool_input={"file_path": "calc.py"}, tool_use_id="t1"
+        ),
+        ToolUse(name="Write", tool_input={"file_path": "other.py"}, tool_use_id="t2"),
+    )
+    assert updater.status_lines == ["Write calc.py", "Write other.py"]
+
+
 async def test_pump_falls_back_when_a_result_has_no_matching_tool_use():
     updater = await _pump_events(ToolResult(tool_use_id="unknown"))
     assert updater.status_lines == ["✓ tool"]
@@ -187,6 +200,36 @@ async def test_pump_replaces_the_plan_artifact_on_every_update():
     assert updater.artifacts[1][1] == "- [x] step one\n- [ ] (high) step two\n"
     # One artifact id across updates, so the caller replaces rather than stacks.
     assert len({a for a in updater.artifact_ids if a}) == 1
+
+
+async def test_pump_streams_thinking_into_its_own_artifact():
+    updater = await _pump_events(
+        Thought(text="first "),
+        Thought(text="second"),
+        TextDelta(text="the answer"),
+    )
+    thinking = [(name, text) for name, text in updater.artifacts if name == "thinking"]
+
+    # Two chunks, then an empty one closing the artifact so a consumer waiting
+    # for a final chunk does not hold it open past the end of the task.
+    assert thinking == [
+        ("thinking", "first "),
+        ("thinking", "second"),
+        ("thinking", ""),
+    ]
+    # The answer must not carry the reasoning.
+    answers = [text for name, text in updater.artifacts if name == "response"]
+    assert "first" not in "".join(answers)
+
+
+async def test_pump_renders_a_markdown_plan_verbatim():
+    updater = await _pump_events(Plan(markdown="# rewrite the parser\n"))
+    assert updater.artifacts == [("plan", "# rewrite the parser\n")]
+
+
+async def test_pump_points_at_a_plan_the_agent_keeps_in_a_file():
+    updater = await _pump_events(Plan(uri="file:///tmp/plan.md"))
+    assert "file:///tmp/plan.md" in updater.artifacts[0][1]
 
 
 async def test_pump_relays_a_notice_as_a_status_update():
