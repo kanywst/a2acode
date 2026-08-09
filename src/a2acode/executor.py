@@ -53,6 +53,12 @@ logger = logging.getLogger(__name__)
 
 _ALLOW_WORDS = {"allow", "yes", "y", "approve", "ok", "accept", "grant"}
 
+# How a caller names one of the agent's own options. Reserved rather than
+# matching bare text: the agent chooses both an option's id and its polarity, so
+# a bare answer would let it label a permissive choice with the word a caller
+# reaches for to refuse.
+_OPTION_PREFIX = "option:"
+
 # Bound the in-memory maps so a long-running server cannot grow without limit
 # (e.g. from many contexts, or tasks left paused on a permission and never
 # answered). The continuity cache (_MAX_CONTEXTS) evicts its least-recently-used
@@ -520,9 +526,8 @@ class ClaudeCodeExecutor(AgentExecutor):
                 {"id": o.option_id, "name": o.name, "kind": o.kind}
                 for o in event.options
             ]
-            text += "\noptions: " + ", ".join(
-                f"{o.option_id} ({o.name})" for o in event.options
-            )
+            offered = ", ".join(f"{o.option_id} ({o.name})" for o in event.options)
+            text += f'\noptions, answered as "{_OPTION_PREFIX}<id>": {offered}'
         await updater.requires_input(
             message=updater.new_agent_message(
                 [Part(text=text)], metadata={"a2acode_permission": permission}
@@ -535,15 +540,19 @@ class ClaudeCodeExecutor(AgentExecutor):
     ) -> PermissionDecision:
         raw = (context.get_user_input() or "").strip()
         text = raw.lower()
-        for option in session.last_options:
-            if text and text in (option.option_id.lower(), option.name.lower()):
-                # The agent's own choice, taken as given: allow/deny cannot say
-                # "accept the edits that follow" or "keep planning".
-                return PermissionDecision(
-                    request_id=session.last_request_id or "",
-                    allow=option.kind.startswith("allow"),
-                    option_id=option.option_id,
-                )
+        if text.startswith(_OPTION_PREFIX):
+            named = text.removeprefix(_OPTION_PREFIX).strip()
+            for option in session.last_options:
+                if named and named == option.option_id.lower():
+                    # The agent's own choice, taken as given: allow/deny cannot
+                    # say "accept the edits that follow" or "keep planning".
+                    return PermissionDecision(
+                        request_id=session.last_request_id or "",
+                        allow=option.kind.startswith("allow"),
+                        option_id=option.option_id,
+                    )
+            # An id that was not offered is not a decision: fall through to a
+            # denial rather than guess which one was meant.
         # The whole answer has to be an allow word. A prefix match would read
         # "allowing that would drop the database, so no" as consent, and a
         # denial carrying its reason is now the documented way to answer.
