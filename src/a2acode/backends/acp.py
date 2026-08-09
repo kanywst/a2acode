@@ -346,20 +346,19 @@ class _ToolCalls:
             call.title = update.title
         if update.kind:
             call.kind = update.kind
-        if isinstance(update.raw_input, Mapping) and update.raw_input:
-            call.raw_input = update.raw_input
-
         if call.announced:
             yield update.model_copy(
                 update={"title": call.title or None, "kind": call.kind}
             )
             return
+        if isinstance(update.raw_input, Mapping) and update.raw_input:
+            call.raw_input = update.raw_input
         # Content and a terminal status are worth telling the caller about even
         # with no arguments to name; anything else waits for the next update.
         if not (call.raw_input or update.content or update.status in _TERMINAL):
             return
         call.announced = True
-        yield s.ToolCallStart(
+        start = s.ToolCallStart(
             session_update="tool_call",
             tool_call_id=update.tool_call_id,
             title=call.title,
@@ -370,6 +369,10 @@ class _ToolCalls:
             raw_input=call.raw_input,
             raw_output=update.raw_output,
         )
+        # Released once the ToolUse carries it: a Write's arguments are the whole
+        # file, and a turn holds every call it made.
+        call.raw_input = None
+        yield start
 
 
 class _BridgeClient(Client):
@@ -691,6 +694,12 @@ class ACPBackend:
                     agent.broken = True
                     raise
                 finally:
+                    # A turn that ends by cancel or crash never reaches the flush
+                    # in _run_turn, and a tool call the agent had started would
+                    # go unmentioned. Already-announced calls yield nothing, so
+                    # the normal path is unaffected.
+                    with suppress(BaseException):
+                        await agent.client.flush_tool_calls()
                     await agent.client.unbind()
         finally:
             # Outside the lock: a turn cancelled while queued behind another
