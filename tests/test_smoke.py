@@ -79,11 +79,18 @@ async def test_echo_permission_denied():
     first = [e async for e in session.drain()]
     request = next(e for e in first if isinstance(e, PermissionRequest))
 
-    session.resolve(PermissionDecision(request_id=request.request_id, allow=False))
+    session.resolve(
+        PermissionDecision(
+            request_id=request.request_id, allow=False, message="use rm -i instead"
+        )
+    )
     rest = [e async for e in session.drain()]
     text = "".join(e.text for e in rest if isinstance(e, TextDelta))
 
     assert "denied" in text
+    # The guidance the caller denied with has to reach the backend, or a denial
+    # can only refuse and never redirect.
+    assert "use rm -i instead" in text
     await session.close()
 
 

@@ -34,15 +34,20 @@ class EchoBackend:
                 "Bash", {"command": prompt}, f"$ {prompt}"
             )
             if not decision.allow:
+                # Relayed the way a real agent uses it, so the offline path shows
+                # whether a denial's guidance actually reached the backend.
+                reason = decision.message or "no reason given"
                 await session.emit(
                     ToolResult(
                         tool_use_id="echo-1",
                         name="Echo",
                         failed=True,
-                        output="permission denied",
+                        output=f"permission denied: {reason}",
                     )
                 )
-                await session.emit(TextDelta("permission denied; nothing run"))
+                await session.emit(
+                    TextDelta(f"permission denied; nothing run ({reason})")
+                )
                 await session.emit(self._result(request))
                 return
 
