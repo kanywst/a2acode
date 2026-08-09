@@ -388,6 +388,11 @@ async def test_a_call_the_agent_never_returns_to_is_announced_at_end_of_turn():
     assert [type(e) for e in session.events] == [ToolUse]
     assert session.events[0].name == "Fetch"
 
+    # Idempotent, so the flush a cancelled or crashed turn runs cannot repeat a
+    # call the normal path already announced.
+    await client.flush_tool_calls()
+    assert len(session.events) == 1
+
 
 @pytest.mark.asyncio
 async def test_a_diff_is_not_replayed_by_the_updates_that_follow_it():
