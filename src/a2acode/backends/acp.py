@@ -102,6 +102,9 @@ _DRAIN_TIMEOUT = 10.0
 # A shell-safe environment variable name, which an agent's need not be.
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
+# Tool-call statuses that say something a caller can act on.
+_TERMINAL = ("completed", "failed")
+
 # How to launch each known ACP agent adapter as a subprocess. A preset is just a
 # default command; pass an explicit ``command``/``args`` to drive any other ACP
 # agent (or a pinned/locally installed adapter). All three go through npx so a
@@ -262,7 +265,7 @@ def _tool_results(update: s.ToolCallStart | s.ToolCallProgress) -> Iterator[Tool
     ACP reports a tool call as a series of updates; only ``completed`` and
     ``failed`` say anything a caller can act on.
     """
-    if update.status not in ("completed", "failed"):
+    if update.status not in _TERMINAL:
         return
     yield ToolResult(
         tool_use_id=update.tool_call_id,
@@ -294,6 +297,81 @@ def _file_changes(content: Sequence[object] | None) -> Iterator[FileChange]:
             )
 
 
+@dataclass
+class _ToolCall:
+    """What a tool call has said about itself so far."""
+
+    title: str = ""
+    kind: Any = None
+    raw_input: Any = None
+    announced: bool = False
+
+
+class _ToolCalls:
+    """The turn's tool calls, each folded together from its own updates.
+
+    ACP announces a tool call before it has parsed the arguments and fills them
+    in on a later update, absent meaning unchanged. So a ToolUse is held back
+    until the call can say what it acts on, and every later update is completed
+    from what the call already said before the pure mapper sees it.
+    """
+
+    def __init__(self) -> None:
+        self._calls: dict[str, _ToolCall] = {}
+
+    def feed(self, update: object) -> Iterator[object]:
+        """Rewrite one update into the updates worth mapping."""
+        if isinstance(update, s.ToolCallStart | s.ToolCallProgress):
+            yield from self._fold(update)
+        else:
+            yield update
+
+    def flush(self) -> Iterator[s.ToolCallStart]:
+        """Announce, at end of turn, calls the agent never said more about."""
+        for call_id, call in self._calls.items():
+            if not call.announced:
+                call.announced = True
+                yield s.ToolCallStart(
+                    session_update="tool_call",
+                    tool_call_id=call_id,
+                    title=call.title,
+                    kind=call.kind,
+                )
+
+    def _fold(
+        self, update: s.ToolCallStart | s.ToolCallProgress
+    ) -> Iterator[s.ToolCallStart | s.ToolCallProgress]:
+        call = self._calls.setdefault(update.tool_call_id, _ToolCall())
+        if update.title:
+            call.title = update.title
+        if update.kind:
+            call.kind = update.kind
+        if isinstance(update.raw_input, Mapping) and update.raw_input:
+            call.raw_input = update.raw_input
+
+        if call.announced:
+            yield update.model_copy(
+                update={"title": call.title or None, "kind": call.kind}
+            )
+            return
+        # Content and a terminal status are worth telling the caller about even
+        # with no arguments to name; anything else waits for the next update.
+        if not (call.raw_input or update.content or update.status in _TERMINAL):
+            return
+        call.announced = True
+        yield s.ToolCallStart(
+            session_update="tool_call",
+            tool_call_id=update.tool_call_id,
+            title=call.title,
+            kind=call.kind,
+            status=update.status,
+            content=update.content,
+            locations=update.locations,
+            raw_input=call.raw_input,
+            raw_output=update.raw_output,
+        )
+
+
 class _BridgeClient(Client):
     """ACP client that forwards agent output onto a BackendSession.
 
@@ -315,11 +393,14 @@ class _BridgeClient(Client):
         self._cwd = Path(cwd).resolve()
         self.cost_usd: float | None = None
         self._terminals: dict[str, Terminal] = {}
+        self._tool_calls = _ToolCalls()
 
     def bind(self, session: BackendSession) -> None:
         """Route this connection's output to ``session`` for one turn."""
         self._session = session
         self.cost_usd = None
+        # Tool call ids belong to the turn that opened them.
+        self._tool_calls = _ToolCalls()
 
     async def unbind(self) -> None:
         self._session = None
@@ -356,8 +437,17 @@ class _BridgeClient(Client):
             return
         if isinstance(update, s.UsageUpdate) and update.cost is not None:
             self.cost_usd = update.cost.amount
-        for event in events_from_update(update):
-            await self._session.emit(event)
+        for folded in self._tool_calls.feed(update):
+            for event in events_from_update(folded):
+                await self._session.emit(event)
+
+    async def flush_tool_calls(self) -> None:
+        """Emit whatever a tool call did say, for one that never went further."""
+        if self._session is None:
+            return
+        for update in self._tool_calls.flush():
+            for event in events_from_update(update):
+                await self._session.emit(event)
 
     async def request_permission(
         self,
@@ -634,6 +724,7 @@ class ACPBackend:
         # still in flight and they are lost behind the end-of-stream sentinel.
         with suppress(TimeoutError):
             await asyncio.wait_for(agent.queue.join(), _DRAIN_TIMEOUT)
+        await agent.client.flush_tool_calls()
         await session.emit(
             Result(
                 session_id=session_id,

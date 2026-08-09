@@ -279,6 +279,137 @@ def test_non_mapping_raw_input_becomes_empty_dict():
     assert events[0].tool_input == {}
 
 
+class _Emitting:
+    """A session that only collects what the client emits."""
+
+    def __init__(self) -> None:
+        self.events: list = []
+
+    async def emit(self, event) -> None:
+        self.events.append(event)
+
+
+async def _feed(*updates, flush: bool = True) -> list:
+    """Push updates through a bound client, as the connection's reader would."""
+    session = _Emitting()
+    client = _BridgeClient(session)  # type: ignore[arg-type]
+    for update in updates:
+        await client.session_update("sess", update)
+    if flush:
+        await client.flush_tool_calls()
+    return session.events
+
+
+@pytest.mark.asyncio
+async def test_arguments_that_arrive_after_a_call_opens_reach_its_tool_use():
+    # The sequence a real agent sends: the call is announced before its
+    # arguments are parsed, and they land on a later update.
+    events = await _feed(
+        s.ToolCallStart(
+            session_update="tool_call",
+            tool_call_id="t1",
+            title="Read File",
+            kind="read",
+            status="pending",
+        ),
+        s.ToolCallProgress(
+            session_update="tool_call_update",
+            tool_call_id="t1",
+            title="Read app.py",
+            raw_input={"file_path": "/w/app.py"},
+        ),
+        s.ToolCallProgress(session_update="tool_call_update", tool_call_id="t1"),
+        s.ToolCallProgress(
+            session_update="tool_call_update", tool_call_id="t1", status="completed"
+        ),
+    )
+
+    uses = [e for e in events if isinstance(e, ToolUse)]
+    assert len(uses) == 1
+    assert uses[0].tool_input == {"file_path": "/w/app.py"}
+    assert uses[0].name == "Read app.py"
+    # The terminal update omits the title, meaning unchanged, so the outcome
+    # resolves to the name the call ended up with.
+    result = next(e for e in events if isinstance(e, ToolResult))
+    assert result.name == "Read app.py"
+
+
+@pytest.mark.asyncio
+async def test_a_call_that_opens_with_its_arguments_is_announced_at_once():
+    events = await _feed(
+        s.ToolCallStart(
+            session_update="tool_call",
+            tool_call_id="t1",
+            title="Write calc.py",
+            kind="edit",
+            raw_input={"file_path": "calc.py"},
+        ),
+        flush=False,
+    )
+
+    assert [type(e) for e in events] == [ToolUse]
+    assert events[0].tool_input == {"file_path": "calc.py"}
+
+
+@pytest.mark.asyncio
+async def test_a_terminal_status_announces_a_call_that_never_had_arguments():
+    events = await _feed(
+        s.ToolCallStart(
+            session_update="tool_call",
+            tool_call_id="t2",
+            title="Run tests",
+            kind="execute",
+        ),
+        s.ToolCallProgress(
+            session_update="tool_call_update",
+            tool_call_id="t2",
+            status="failed",
+            content=[tool_content(text_block("2 tests failed"))],
+        ),
+    )
+
+    assert [type(e) for e in events] == [ToolUse, ToolResult]
+    assert events[0].name == "Run tests"
+
+
+@pytest.mark.asyncio
+async def test_a_call_the_agent_never_returns_to_is_announced_at_end_of_turn():
+    session = _Emitting()
+    client = _BridgeClient(session)  # type: ignore[arg-type]
+    await client.session_update(
+        "sess",
+        s.ToolCallStart(
+            session_update="tool_call", tool_call_id="t3", title="Fetch", kind="fetch"
+        ),
+    )
+    assert session.events == []
+
+    await client.flush_tool_calls()
+    assert [type(e) for e in session.events] == [ToolUse]
+    assert session.events[0].name == "Fetch"
+
+
+@pytest.mark.asyncio
+async def test_a_diff_is_not_replayed_by_the_updates_that_follow_it():
+    events = await _feed(
+        s.ToolCallStart(
+            session_update="tool_call",
+            tool_call_id="t1",
+            title="Write a.py",
+            raw_input={"file_path": "a.py"},
+            content=[tool_diff_content(path="a.py", new_text="y\n", old_text="x\n")],
+        ),
+        s.ToolCallProgress(
+            session_update="tool_call_update",
+            tool_call_id="t1",
+            status="completed",
+            content=[tool_content(text_block("written"))],
+        ),
+    )
+
+    assert len([e for e in events if isinstance(e, FileChange)]) == 1
+
+
 def test_select_option_prefers_one_shot():
     assert select_option(_opts(), allow=True) == "a"
     assert select_option(_opts(), allow=False) == "r"

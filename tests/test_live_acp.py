@@ -146,6 +146,20 @@ async def test_a_tool_call_carries_its_diff_and_its_outcome(tmp_path):
     assert result.output == "written"
 
 
+async def test_a_tool_call_keeps_the_arguments_it_reported_late(tmp_path):
+    backend = _backend(tmp_path)
+    try:
+        events = await _turn(backend, "peek at the file")
+    finally:
+        await backend.aclose()
+
+    uses = [e for e in events if isinstance(e, ToolUse)]
+    assert len(uses) == 1
+    assert uses[0].tool_input == {"file_path": "app.py"}
+    assert uses[0].name == "Read app.py"
+    assert next(e for e in events if isinstance(e, ToolResult)).name == "Read app.py"
+
+
 async def test_a_failing_tool_is_reported_as_failed(tmp_path):
     backend = _backend(tmp_path)
     try:
