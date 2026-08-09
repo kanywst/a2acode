@@ -218,6 +218,9 @@ class PlanTracker:
         status = str(tool_input.get("status") or "")
         if status == "deleted":
             del self._tasks[key]
+            # Or the id keeps naming a step that is gone, and a task id the tool
+            # reuses later would resolve to it instead of the new task.
+            self._keys = {tid: k for tid, k in self._keys.items() if k != key}
         else:
             task.status = status or task.status
             task.content = str(tool_input.get("subject") or task.content)
