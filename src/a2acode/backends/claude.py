@@ -200,6 +200,9 @@ class PlanTracker:
         found = _TASK_ID.search(output)
         if found:
             self._keys[found.group(1)] = tool_use_id
+            # One id per created task, so it is bounded alongside them; an entry
+            # left pointing at an evicted task just misses on lookup.
+            _bound(self._keys, _MAX_STEPS)
         return self._plan()
 
     def _update(self, tool_input: dict[str, Any]) -> Plan | None:
