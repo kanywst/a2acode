@@ -70,8 +70,12 @@ _TASK_CREATE = "TaskCreate"
 _TASK_UPDATE = "TaskUpdate"
 _PLAN_TOOLS = (_TODO_TOOL, _TASK_CREATE, _TASK_UPDATE)
 
-# Contexts whose task list is kept between turns.
+# Contexts whose task list is kept between turns, and how much one such list
+# holds: a context can be resumed for as long as the server runs, and a plan is
+# a checklist someone reads, so the oldest entries are the ones to lose.
 _MAX_PLANS = 256
+_MAX_STEPS = 256
+_MAX_PENDING = 64
 
 # "Task #1 created successfully: ..." - a created task's id is reported by its
 # result, not by the call, and TaskUpdate addresses it by that id.
@@ -112,6 +116,11 @@ def events_from_message(message: object) -> Iterator[BackendEvent]:
         )
 
 
+def _bound(store: dict[str, Any], cap: int) -> None:
+    while len(store) > cap:
+        del store[next(iter(store))]
+
+
 @dataclass
 class _Task:
     content: str
@@ -144,6 +153,9 @@ class PlanTracker:
         if isinstance(event, ToolUse):
             if event.name in _PLAN_TOOLS:
                 self._calls[event.tool_use_id] = (event.name, event.tool_input)
+                # A call whose result never arrives would otherwise sit here for
+                # the life of the conversation.
+                _bound(self._calls, _MAX_PENDING)
         elif isinstance(event, ToolResult):
             return self._apply(event)
         return None
@@ -183,6 +195,7 @@ class PlanTracker:
         if not subject:
             return None
         self._tasks[tool_use_id] = _Task(content=subject)
+        _bound(self._tasks, _MAX_STEPS)
         # The id TaskUpdate will address it by is reported here, not by the call.
         found = _TASK_ID.search(output)
         if found:
