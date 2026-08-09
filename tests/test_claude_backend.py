@@ -105,74 +105,81 @@ def test_errored_tool_result_is_flagged_and_block_content_is_joined():
     assert result.output == "boom"
 
 
-def _created(tool_use_id: str, task_id: str) -> ToolResult:
-    """The result a TaskCreate call gets back, which is where its id is."""
-    return ToolResult(
-        tool_use_id=tool_use_id,
-        output=f"Task #{task_id} created successfully: something",
+def _steps(plan: Plan) -> list[tuple[str, str]]:
+    return [(step.content, step.status) for step in plan.steps]
+
+
+def _call(tracker: PlanTracker, name, tool_input, tool_use_id, output="", failed=False):
+    """One plan tool call and the result that decides whether it stuck."""
+    assert tracker.absorb(ToolUse(name, tool_input, tool_use_id)) is None
+    return tracker.absorb(
+        ToolResult(tool_use_id=tool_use_id, failed=failed, output=output)
     )
 
 
-def _steps(plan: Plan) -> list[tuple[str, str]]:
-    return [(step.content, step.status) for step in plan.steps]
+def _create(tracker: PlanTracker, subject, tool_use_id, task_id, **kwargs):
+    return _call(
+        tracker,
+        "TaskCreate",
+        {"subject": subject},
+        tool_use_id,
+        output=f"Task #{task_id} created successfully: {subject}",
+        **kwargs,
+    )
 
 
 def test_the_task_tools_build_a_plan_one_entry_at_a_time():
     tracker = PlanTracker()
 
-    first = tracker.absorb(ToolUse("TaskCreate", {"subject": "read the code"}, "t1"))
+    first = _create(tracker, "read the code", "t1", "1")
     assert _steps(first) == [("read the code", "pending")]
-    # The result only teaches the tracker the id; it is not a plan change.
-    assert tracker.absorb(_created("t1", "1")) is None
 
-    second = tracker.absorb(ToolUse("TaskCreate", {"subject": "write the fix"}, "t2"))
-    assert tracker.absorb(_created("t2", "2")) is None
+    second = _create(tracker, "write the fix", "t2", "2")
     assert len(second.steps) == 2
 
-    started = tracker.absorb(
-        ToolUse("TaskUpdate", {"taskId": "1", "status": "completed"}, "t3")
-    )
-    assert _steps(started) == [
+    done = _call(tracker, "TaskUpdate", {"taskId": "1", "status": "completed"}, "t3")
+    assert _steps(done) == [
         ("read the code", "completed"),
         ("write the fix", "pending"),
     ]
 
 
+def test_a_task_whose_call_failed_never_enters_the_plan():
+    # Most likely because the A2A caller denied it, and a plan claiming work the
+    # agent never took on is worse than no plan.
+    tracker = PlanTracker()
+    assert _create(tracker, "do the risky thing", "t1", "1", failed=True) is None
+
+    plan = _create(tracker, "do the safe thing", "t2", "2")
+    assert _steps(plan) == [("do the safe thing", "pending")]
+
+
 def test_a_deleted_task_leaves_the_plan():
     tracker = PlanTracker()
-    tracker.absorb(ToolUse("TaskCreate", {"subject": "drop me"}, "t1"))
-    tracker.absorb(_created("t1", "1"))
+    _create(tracker, "drop me", "t1", "1")
 
-    plan = tracker.absorb(
-        ToolUse("TaskUpdate", {"taskId": "1", "status": "deleted"}, "t2")
-    )
+    plan = _call(tracker, "TaskUpdate", {"taskId": "1", "status": "deleted"}, "t2")
     assert plan is not None
     assert plan.steps == []
 
 
 def test_an_update_to_a_task_the_tracker_never_saw_is_ignored():
     tracker = PlanTracker()
-    assert (
-        tracker.absorb(
-            ToolUse("TaskUpdate", {"taskId": "9", "status": "completed"}, "t1")
-        )
-        is None
-    )
+    assert _call(tracker, "TaskUpdate", {"taskId": "9", "status": "done"}, "t1") is None
 
 
 def test_todowrite_still_carries_a_whole_plan():
     # Older CLIs write the list in one call, so one call is a whole plan.
-    plan = PlanTracker().absorb(
-        ToolUse(
-            "TodoWrite",
-            {
-                "todos": [
-                    {"content": "read the code", "status": "completed"},
-                    {"content": "write the fix", "status": "in_progress"},
-                ]
-            },
-            "t1",
-        )
+    plan = _call(
+        PlanTracker(),
+        "TodoWrite",
+        {
+            "todos": [
+                {"content": "read the code", "status": "completed"},
+                {"content": "write the fix", "status": "in_progress"},
+            ]
+        },
+        "t1",
     )
     assert _steps(plan) == [
         ("read the code", "completed"),
@@ -183,10 +190,14 @@ def test_todowrite_still_carries_a_whole_plan():
 def test_a_malformed_task_list_does_not_raise():
     tracker = PlanTracker()
     for todos in ("oops", [1, "x"], []):
-        assert tracker.absorb(ToolUse("TodoWrite", {"todos": todos}, "t1")) is None
+        assert _call(tracker, "TodoWrite", {"todos": todos}, "t1") is None
+    assert _call(tracker, "TaskCreate", {"description": "no subject"}, "t2") is None
+
+
+def test_a_result_for_a_tool_that_is_not_a_plan_call_is_ignored():
+    tracker = PlanTracker()
     assert (
-        tracker.absorb(ToolUse("TaskCreate", {"description": "no subject"}, "t2"))
-        is None
+        tracker.absorb(ToolResult(tool_use_id="t1", output="Task #1 whatever")) is None
     )
 
 
