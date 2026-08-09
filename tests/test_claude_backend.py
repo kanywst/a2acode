@@ -279,6 +279,8 @@ def test_one_lists_steps_are_bounded(monkeypatch):
         _create(tracker, f"step {i}", f"t{i}", str(i))
 
     assert _steps(tracker._plan()) == [("step 1", "pending"), ("step 2", "pending")]
+    # The id map is bounded with them, or it outlives every task it named.
+    assert len(tracker._keys) == 2
 
 
 def test_calls_still_waiting_on_a_result_are_bounded(monkeypatch):
