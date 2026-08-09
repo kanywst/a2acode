@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from contextlib import suppress
 from dataclasses import dataclass, field
 from uuid import uuid4
 
@@ -420,8 +419,7 @@ class ClaudeCodeExecutor(AgentExecutor):
             # queue, so the status it enqueues is dropped and the task stays
             # `working`. Awaited rather than shielded: the enqueue does not
             # suspend while the queue has room, so it lands ahead of that close.
-            with suppress(Exception):
-                await updater.cancel()
+            await self._report_cancel(updater, task_id)
             raise
         except Exception:  # noqa: BLE001 (surface failure without leaking details)
             logger.exception("backend run failed for task %s", task_id)
@@ -487,10 +485,21 @@ class ClaudeCodeExecutor(AgentExecutor):
         # the cancelled producer to close the queue. So emit here, before the
         # first await - but only when no _pump will, or the caller sees two.
         if session is None or session.is_parked:
-            with suppress(Exception):
-                await updater.cancel()
+            await self._report_cancel(updater, task_id)
         if session is not None:
             await session.close()
+
+    @staticmethod
+    async def _report_cancel(updater: TaskUpdater, task_id: str) -> None:
+        """Write the terminal state, logged rather than raised if it cannot.
+
+        Both callers are already unwinding, and a queue closed under us drops the
+        event without raising, so a failure here is this very bug coming back.
+        """
+        try:
+            await updater.cancel()
+        except Exception:
+            logger.debug("could not cancel task %s", task_id, exc_info=True)
 
     @staticmethod
     async def _request_input(updater: TaskUpdater, event: PermissionRequest) -> None:
