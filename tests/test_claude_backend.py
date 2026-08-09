@@ -301,6 +301,19 @@ def test_kept_task_lists_are_bounded(monkeypatch):
     assert set(backend._plans) == {"b", "c"}
 
 
+def test_a_reused_context_moves_off_the_eviction_front(monkeypatch):
+    monkeypatch.setattr(claude_mod, "_MAX_PLANS", 2)
+    backend = ClaudeBackend()
+    backend._plan_for(RunRequest(prompt="hi", context_id="a"))
+    backend._plan_for(RunRequest(prompt="hi", context_id="b"))
+    # Touching "a" again without a resume still has to refresh its position, or
+    # the context in active use is the one evicted.
+    backend._plan_for(RunRequest(prompt="hi", context_id="a"))
+    backend._plan_for(RunRequest(prompt="hi", context_id="c"))
+
+    assert set(backend._plans) == {"a", "c"}
+
+
 def test_options_applies_settings():
     backend = ClaudeBackend(
         cwd="/tmp/project",

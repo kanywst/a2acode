@@ -285,11 +285,12 @@ class ClaudeBackend:
         context_id = request.context_id
         if context_id is None:
             return PlanTracker()
-        # Only a resumed turn inherits one: without a resume the agent gets a
-        # fresh conversation, so an earlier list is not what it is working from.
-        tracker = self._plans.pop(context_id, None) if request.resume else None
-        tracker = tracker or PlanTracker()
-        # Pop-then-set so a reused context moves off the eviction front.
+        # Popped either way, so a reused context moves off the eviction front: a
+        # plain reassignment would leave the key in its original position.
+        previous = self._plans.pop(context_id, None)
+        # Only a resumed turn inherits one. Without a resume the agent gets a
+        # fresh conversation, so an earlier list is not what it works from.
+        tracker = previous if previous is not None and request.resume else PlanTracker()
         self._plans[context_id] = tracker
         while len(self._plans) > _MAX_PLANS:
             del self._plans[next(iter(self._plans))]
