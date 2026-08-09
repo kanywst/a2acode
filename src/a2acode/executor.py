@@ -420,7 +420,7 @@ class ClaudeCodeExecutor(AgentExecutor):
             # queue, so the status it enqueues is dropped and the task stays
             # `working`. Awaited rather than shielded: the enqueue does not
             # suspend, so it lands ahead of that close.
-            with suppress(BaseException):
+            with suppress(Exception):
                 await updater.cancel()
             raise
         except Exception:  # noqa: BLE001 (surface failure without leaking details)
