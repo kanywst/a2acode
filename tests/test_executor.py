@@ -359,6 +359,22 @@ def test_decision_hands_the_agent_the_words_the_caller_denied_with():
     assert decision.message == "No, run pytest -x instead"
 
 
+def test_decision_does_not_read_a_prose_refusal_as_consent():
+    # The words a caller refuses with are free text now, so a prefix match on
+    # "allow" would approve exactly the answers that mean the opposite.
+    for answer in (
+        "allowing that would drop the database, so no",
+        "allow only the read, not the write",
+        "allowance denied",
+    ):
+        assert not _decide(answer).allow
+
+
+def test_decision_forgives_trailing_punctuation():
+    assert _decide("yes!").allow
+    assert _decide("allow.").allow
+
+
 def test_decision_leaves_a_bare_deny_to_the_backend_wording():
     assert _decide("").message == ""
 

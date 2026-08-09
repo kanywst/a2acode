@@ -525,8 +525,10 @@ class ClaudeCodeExecutor(AgentExecutor):
         context: RequestContext, session: BackendSession
     ) -> PermissionDecision:
         raw = (context.get_user_input() or "").strip()
-        text = raw.lower()
-        allow = text in _ALLOW_WORDS or text.startswith("allow")
+        # The whole answer has to be an allow word. A prefix match would read
+        # "allowing that would drop the database, so no" as consent, and a
+        # denial carrying its reason is now the documented way to answer.
+        allow = raw.lower().rstrip(".!") in _ALLOW_WORDS
         return PermissionDecision(
             request_id=session.last_request_id or "",
             allow=allow,
