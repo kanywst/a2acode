@@ -210,14 +210,18 @@ class _Budget:
                 self.binary -= len(attachment.data)
 
 
-def _shown(value: str) -> str:
-    """Render an agent-supplied label as one quoted token.
+def _one_line(value: str) -> str:
+    """Fold agent-supplied text onto one line.
 
-    An option's id and name are the agent's to choose, and they land in a block
-    the caller reads line by line to decide what it is approving. One carrying a
-    newline would otherwise forge a second list of options.
+    The pause is what the caller reads to decide, and it reads line by line, so
+    anything the agent names it could otherwise forge a line of its own.
     """
-    return repr(" ".join(value.split())[:80])
+    return " ".join(value.split())
+
+
+def _shown(value: str) -> str:
+    """Render an agent-supplied label as one quoted token."""
+    return repr(_one_line(value)[:80])
 
 
 def _describe_tool(event: ToolUse) -> str:
@@ -523,7 +527,10 @@ class ClaudeCodeExecutor(AgentExecutor):
     @staticmethod
     async def _request_input(updater: TaskUpdater, event: PermissionRequest) -> None:
         line = event.description or event.tool_name
-        text = f"Permission requested for {event.tool_name}: {line}"
+        # Not truncated, unlike an option's label: for a terminal this line is
+        # the command being approved, and the caller has to see all of it.
+        text = f"Permission requested for {_one_line(event.tool_name)}: "
+        text += _one_line(line)
         permission: dict[str, object] = {
             "request_id": event.request_id,
             "tool": event.tool_name,
