@@ -96,6 +96,9 @@ _MAX_AGENTS = 32
 # Terminals an agent may hold open at once within a turn.
 _MAX_TERMINALS = 16
 
+# Tool calls one turn is remembered across, for folding their later updates in.
+_MAX_TOOL_CALLS = 4096
+
 # How long a finished turn waits for its trailing notifications to be handled.
 _DRAIN_TIMEOUT = 10.0
 
@@ -341,7 +344,16 @@ class _ToolCalls:
     def _fold(
         self, update: s.ToolCallStart | s.ToolCallProgress
     ) -> Iterator[s.ToolCallStart | s.ToolCallProgress]:
-        call = self._calls.setdefault(update.tool_call_id, _ToolCall())
+        call = self._calls.get(update.tool_call_id)
+        if call is None:
+            if len(self._calls) >= _MAX_TOOL_CALLS:
+                # Ids are the agent's to invent, and every other per-turn
+                # collection here is bounded. Past the bound, map the update as
+                # it came rather than remember it: less detail, nothing dropped.
+                logger.warning("tool calls in one turn exceed %d", _MAX_TOOL_CALLS)
+                yield update
+                return
+            call = self._calls.setdefault(update.tool_call_id, _ToolCall())
         if update.title:
             call.title = update.title
         if update.kind:
@@ -697,10 +709,13 @@ class ACPBackend:
                     # A turn that ends by cancel or crash never reaches the flush
                     # in _run_turn, and a tool call the agent had started would
                     # go unmentioned. Already-announced calls yield nothing, so
-                    # the normal path is unaffected.
-                    with suppress(BaseException):
-                        await agent.client.flush_tool_calls()
-                    await agent.client.unbind()
+                    # the normal path is unaffected. Nested so a cancellation
+                    # landing here still propagates without skipping unbind.
+                    try:
+                        with suppress(Exception):
+                            await agent.client.flush_tool_calls()
+                    finally:
+                        await agent.client.unbind()
         finally:
             # Outside the lock: a turn cancelled while queued behind another
             # never takes it, and must still give the claim back.

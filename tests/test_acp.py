@@ -395,6 +395,29 @@ async def test_a_call_the_agent_never_returns_to_is_announced_at_end_of_turn():
 
 
 @pytest.mark.asyncio
+async def test_past_the_bound_a_call_is_mapped_as_it_came(monkeypatch):
+    monkeypatch.setattr(acp_mod, "_MAX_TOOL_CALLS", 1)
+    events = await _feed(
+        s.ToolCallStart(
+            session_update="tool_call",
+            tool_call_id="t1",
+            title="Read one",
+            raw_input={"file_path": "a.py"},
+        ),
+        s.ToolCallStart(
+            session_update="tool_call", tool_call_id="t2", title="Read two"
+        ),
+    )
+
+    # The second call is not remembered, so it maps straight through: less
+    # detail than the fold gives, but still announced.
+    assert [e.name for e in events if isinstance(e, ToolUse)] == [
+        "Read one",
+        "Read two",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_a_diff_is_not_replayed_by_the_updates_that_follow_it():
     events = await _feed(
         s.ToolCallStart(
