@@ -337,6 +337,9 @@ class _ToolCalls:
         for call_id, call in self._calls.items():
             if not call.announced:
                 call.announced = True
+                # Announced with nothing to name, so arguments straggling in past
+                # the drain timeout still get their one correction.
+                call.bare = True
                 yield s.ToolCallStart(
                     session_update="tool_call",
                     tool_call_id=call_id,
