@@ -196,6 +196,9 @@ def test_a_deleted_task_leaves_the_plan():
     plan = _call(tracker, "TaskUpdate", {"taskId": "1", "status": "deleted"}, "t2")
     assert plan is not None
     assert plan.steps == []
+    # The id stops naming anything, so a later task reusing it is not confused
+    # for the one that was deleted.
+    assert tracker._keys == {}
 
 
 def test_an_update_to_a_task_the_tracker_never_saw_is_ignored():
