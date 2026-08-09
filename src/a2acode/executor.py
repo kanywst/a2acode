@@ -211,12 +211,17 @@ class _Budget:
 
 
 def _one_line(value: str) -> str:
-    """Fold agent-supplied text onto one line.
+    """Fold agent-supplied text onto one printable line.
 
-    The pause is what the caller reads to decide, and it reads line by line, so
-    anything the agent names it could otherwise forge a line of its own.
+    The pause is what the caller reads to decide, and a terminal acts on control
+    characters rather than showing them: a newline in a tool's title could forge
+    a line, and an escape sequence could redraw over the command being approved.
     """
-    return " ".join(value.split())
+    folded = " ".join(value.split())
+    return "".join(
+        c if c.isprintable() else c.encode("unicode_escape").decode("ascii")
+        for c in folded
+    )
 
 
 def _shown(value: str) -> str:
