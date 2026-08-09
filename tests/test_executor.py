@@ -284,6 +284,42 @@ async def test_pump_cancels_the_task_when_its_run_is_cancelled():
     await session.close()
 
 
+class _CancelContext:
+    def __init__(self, task_id: str, context_id: str) -> None:
+        self.task_id = task_id
+        self.context_id = context_id
+
+
+async def test_cancelling_a_paused_task_writes_its_terminal_state(monkeypatch):
+    # No _pump is left to write it: the task returned from the pump when it
+    # paused, so tasks/cancel is the only thing that can close it out.
+    updater = _RecordingUpdater()
+    monkeypatch.setattr(executor_mod, "TaskUpdater", lambda *a, **k: updater)
+    executor = ClaudeCodeExecutor(make_backend("echo"))
+    parked = await _parked_session()
+    executor._live["task-x"] = parked
+
+    await executor.cancel(_CancelContext("task-x", "ctx-x"), object())
+
+    assert updater.did_cancel
+    assert "task-x" not in executor._live
+
+
+async def test_cancelling_a_running_task_leaves_the_state_to_its_pump():
+    # _pump emits it from inside its CancelledError handler, where it still
+    # lands ahead of the queue closing; emitting here too would double it.
+    updater = _RecordingUpdater()
+    executor = ClaudeCodeExecutor(make_backend("echo"))
+    running = _running_session()
+    executor._live["task-x"] = running
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(executor_mod, "TaskUpdater", lambda *a, **k: updater)
+        await executor.cancel(_CancelContext("task-x", "ctx-x"), object())
+
+    assert not updater.did_cancel
+
+
 async def test_pump_fails_an_evicted_session():
     # A session that finished (its runner returned, queuing the done sentinel)
     # but was flagged evicted: _pump must fail the task, not complete it with the

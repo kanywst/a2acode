@@ -419,7 +419,7 @@ class ClaudeCodeExecutor(AgentExecutor):
             # AgentExecutor.cancel is called, and unwinding closes the event
             # queue, so the status it enqueues is dropped and the task stays
             # `working`. Awaited rather than shielded: the enqueue does not
-            # suspend, so it lands ahead of that close.
+            # suspend while the queue has room, so it lands ahead of that close.
             with suppress(Exception):
                 await updater.cancel()
             raise
@@ -481,10 +481,16 @@ class ClaudeCodeExecutor(AgentExecutor):
         assert task_id is not None and context_id is not None
         self._streams.pop(task_id, None)
         session = self._live.pop(task_id, None)
+        updater = TaskUpdater(event_queue, task_id, context_id)
+        # A task paused on a permission has no _pump left to write its terminal
+        # state, and closing the session below awaits, which is long enough for
+        # the cancelled producer to close the queue. So emit here, before the
+        # first await - but only when no _pump will, or the caller sees two.
+        if session is None or session.is_parked:
+            with suppress(Exception):
+                await updater.cancel()
         if session is not None:
             await session.close()
-        updater = TaskUpdater(event_queue, task_id, context_id)
-        await updater.cancel()
 
     @staticmethod
     async def _request_input(updater: TaskUpdater, event: PermissionRequest) -> None:
