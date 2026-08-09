@@ -37,9 +37,14 @@ jobs:
       # Required by the action's default GitHub App authentication.
       id-token: write
     steps:
+      # Nothing here needs an authenticated git: the review reads the tree and
+      # reaches the API through `gh`. The action replaces whatever credential
+      # checkout left behind with its own anyway, so persisting one only widens
+      # what the agent can pick up out of .git/config.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       # Without the secret the action exits successfully having reviewed
       # nothing, which is worse than failing: the check goes green and the
@@ -87,10 +92,21 @@ jobs:
             5. Long-running work. Cancellation, timeouts and a client that disconnects
                mid-task should not leave an agent running unattended.
 
-            Post findings as inline comments on the lines they concern. Use one
-            top-level comment for the summary. Be specific and cite
-            `file:line`. If the diff is clean against all of the above, say so
-            in one line rather than manufacturing nits.
+            Post findings as inline comments on the lines they concern. Be
+            specific and cite `file:line`. If the diff is clean against all of
+            the above, say so in one line rather than manufacturing nits.
 
+            Post the summary as one top-level comment, and start the command
+            with exactly this prefix:
+
+            gh pr comment ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --body ...
+
+            The only write this job is allowed is a comment on this pull
+            request. Any other form of the command is denied and the summary
+            goes nowhere.
+
+          # The diff under review is the untrusted input here, so the one write
+          # granted is pinned to the pull request that triggered the run: a
+          # comment planted in a diff cannot redirect it at another one.
           claude_args: |
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment ${{ github.event.pull_request.number }} --repo ${{ github.repository }}:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
