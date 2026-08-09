@@ -187,8 +187,9 @@ class PlanTracker:
         return self._plan()
 
     def _update(self, tool_input: dict[str, Any]) -> Plan | None:
-        key = self._keys.get(str(tool_input.get("taskId") or ""))
-        task = self._tasks.get(key) if key else None
+        task_id = tool_input.get("taskId")
+        key = self._keys.get(str(task_id)) if task_id is not None else None
+        task = self._tasks.get(key) if key is not None else None
         if key is None or task is None:
             return None
         status = str(tool_input.get("status") or "")
