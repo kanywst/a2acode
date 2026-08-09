@@ -483,7 +483,9 @@ class ClaudeCodeExecutor(AgentExecutor):
         # A task paused on a permission has no _pump left to write its terminal
         # state, and closing the session below awaits, which is long enough for
         # the cancelled producer to close the queue. So emit here, before the
-        # first await - but only when no _pump will, or the caller sees two.
+        # first await. Skipped for a session still running, which is the one case
+        # where a _pump is there to emit it and this would be a second status; a
+        # missing session means it already finished, and the enqueue is dropped.
         if session is None or session.is_parked:
             await self._report_cancel(updater, task_id)
         if session is not None:
