@@ -161,8 +161,8 @@ A tool that needs approval pauses the task in the A2A `input-required` state ins
 ```bash
 uv run a2acode call "sudo reboot"
 # ... [input-required] Permission requested for Bash: $ sudo reboot
-#       reply: a2acode call "allow" --task <id> --context <id>
-uv run a2acode call "allow" --task <id> --context <id>
+#       reply: a2acode call "allow" --task <id> --context <id> --request <id>
+uv run a2acode call "allow" --task <id> --context <id> --request <id>
 ```
 
 An answer of `allow`, `yes`, `y`, `ok`, `approve`, `accept`, or `grant` — the whole answer, nothing around it — approves. Anything else denies, which is what makes it safe to answer in prose. The agent session stays alive across the pause, so it resumes exactly where it stopped. Over ACP this is the agent's `session/request_permission` call answered from the A2A caller's reply; with the `claude` backend it routes through the Claude SDK's `can_use_tool`.
@@ -170,6 +170,8 @@ An answer of `allow`, `yes`, `y`, `ok`, `approve`, `accept`, or `grant` — the 
 A denial carries the words it was written with, so `no, run pytest -x instead` can redirect the turn rather than merely refuse it. How far the reason travels is the agent protocol's call: the `claude` backend hands it to the agent, and so does a denied ACP terminal, but ACP's answer to an ordinary tool permission carries only the option chosen and has nowhere to put text.
 
 Some gates are not yes/no. Claude Code's end-of-plan gate offers three choices — accept the edits that follow, allow this once and keep gating, or keep planning — so the pause lists whatever the agent offered, each with the `kind` that says what picking it would mean, and the caller answers `option:<id>` with the one it wants. The id is what binds; the kind is the agent's label for it. Anything else still resolves to allow or deny as above; naming an option takes the prefix because the agent chooses both an option's id and its polarity, and a bare answer would let it label a permissive choice with the word a caller reaches for to refuse.
+
+An answer settles one prompt, not whichever is waiting. Each pause carries a `requestId`, and an answer naming it is only applied to that prompt; a run often stops again immediately, so a client retry or a double submit of the previous answer would otherwise decide a tool the caller was never shown. An answer that names nothing is still taken, except when it is the same message arriving twice. Either way the server restates what is actually pending instead of applying the answer.
 
 Whatever the agent decides needs approval becomes an `input-required` pause rather than being silently skipped or auto-approved; the caller, not the server, holds the decision. Read-only actions the agent already treats as safe still run without a prompt.
 

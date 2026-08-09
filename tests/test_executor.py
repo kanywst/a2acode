@@ -470,6 +470,52 @@ async def test_input_required_carries_the_options_the_agent_offered():
     assert "'acceptEdits' ['allow_always'] 'Accept edits'" in updater.input_line
 
 
+def _answering(message_id: str, request_id: str = "") -> _Context:
+    """A follow-up message, optionally naming the prompt it answers."""
+    from a2a.types import Message, Part, Role
+
+    message = Message(
+        message_id=message_id, role=Role.ROLE_USER, parts=[Part(text="allow")]
+    )
+    if request_id:
+        message.metadata.update({"a2acode_permission": {"request_id": request_id}})
+    context = _Context("allow")
+    context.message = message  # type: ignore[attr-defined]
+    return context
+
+
+_ASKED = PermissionRequest(request_id="req-2", tool_name="Bash", tool_input={})
+
+
+def test_an_answer_naming_the_waiting_request_is_taken():
+    stream = executor_mod._Stream(artifact_id="a")
+    assert not ClaudeCodeExecutor._answers_something_else(
+        _answering("m1", "req-2"), _ASKED, stream
+    )
+
+
+def test_an_answer_naming_an_earlier_request_is_not():
+    # The caller decided about req-1; req-2 is a tool it has not been shown.
+    stream = executor_mod._Stream(artifact_id="a")
+    assert ClaudeCodeExecutor._answers_something_else(
+        _answering("m1", "req-1"), _ASKED, stream
+    )
+
+
+def test_a_resent_answer_does_not_settle_the_next_request():
+    # No request id echoed, so the message id carries it: a client retry or a
+    # double submit sends the same one twice.
+    stream = executor_mod._Stream(artifact_id="a")
+    assert not ClaudeCodeExecutor._answers_something_else(
+        _answering("m1"), _ASKED, stream
+    )
+    stream.answered.add("m1")
+    assert ClaudeCodeExecutor._answers_something_else(_answering("m1"), _ASKED, stream)
+    assert not ClaudeCodeExecutor._answers_something_else(
+        _answering("m2"), _ASKED, stream
+    )
+
+
 async def test_input_required_strips_escapes_from_what_the_agent_named():
     # A terminal acts on an escape sequence rather than printing it, so one in a
     # tool's title could redraw the line over the command being approved.

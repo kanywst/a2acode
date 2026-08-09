@@ -226,9 +226,14 @@ def call(
     task: str | None = typer.Option(
         None, help="taskId to answer an input-required prompt (e.g. 'allow')."
     ),
+    request: str | None = typer.Option(
+        None,
+        help="requestId from the prompt being answered, so a resend cannot "
+        "settle a later one.",
+    ),
 ) -> None:
     """Send a message and print the streamed task events."""
-    asyncio.run(_call(text, url, context, task))
+    asyncio.run(_call(text, url, context, task, request))
 
 
 @app.command()
@@ -254,7 +259,13 @@ def _state_name(state) -> str:
     return TaskState.Name(state).removeprefix("TASK_STATE_").lower()
 
 
-async def _call(text: str, url: str, context: str | None, task: str | None) -> None:
+async def _call(
+    text: str,
+    url: str,
+    context: str | None,
+    task: str | None,
+    request_id: str | None = None,
+) -> None:
     from a2a.client import create_client
     from a2a.client.client import ClientConfig
     from a2a.types import Message, Part, Role, SendMessageRequest
@@ -268,8 +279,12 @@ async def _call(text: str, url: str, context: str | None, task: str | None) -> N
         message.context_id = context
     if task:
         message.task_id = task
+    if request_id:
+        # Names the prompt this answers, so the server can turn it down rather
+        # than apply it to whatever it is waiting on now.
+        message.metadata.update({"a2acode_permission": {"request_id": request_id}})
 
-    ids = {"task": task or "", "context": context or ""}
+    ids = {"task": task or "", "context": context or "", "request": ""}
     streaming = False
     timeout = httpx.Timeout(600.0, connect=10.0)
     async with httpx.AsyncClient(timeout=timeout) as http:
@@ -295,6 +310,7 @@ async def _call(text: str, url: str, context: str | None, task: str | None) -> N
                     if state == "working" and line:
                         typer.echo(f"  · {line}")
                     elif state == "input_required":
+                        ids["request"] = _asked_request_id(s.message)
                         _render_input_required(line, ids, url)
                     elif state != "working":
                         meta = _format_meta(s.message) if s.message else ""
@@ -321,11 +337,20 @@ async def _call(text: str, url: str, context: str | None, task: str | None) -> N
                 await closer
 
 
+def _asked_request_id(msg) -> str:
+    """The requestId the pause published, for the reply to name back."""
+    from google.protobuf.json_format import MessageToDict
+
+    block = (MessageToDict(msg).get("metadata") or {}).get("a2acode_permission")
+    return str(block.get("request_id", "")) if isinstance(block, dict) else ""
+
+
 def _render_input_required(line: str, ids: dict[str, str], url: str) -> None:
     typer.echo(f"[input-required] {line}")
+    named = f" --request {ids['request']}" if ids.get("request") else ""
     follow = (
         f'a2acode call "allow" --task {ids["task"]} '
-        f"--context {ids['context']} --url {url}"
+        f"--context {ids['context']}{named} --url {url}"
     )
     typer.echo(f"  reply: {follow}")
     typer.echo('  (or "deny" to refuse)')

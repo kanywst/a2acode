@@ -109,6 +109,25 @@ class _Stream:
     # Reasoning streams into its own artifact, never into the answer.
     thinking_artifact_id: str = ""
     sent_thought: bool = False
+    # The request the caller is being asked about, kept so an answer that does
+    # not belong to it can be turned down by restating what is still pending.
+    asked: PermissionRequest | None = None
+    # Messages that have already settled a request, so a resend cannot settle
+    # the next one. Per task, and gone with it.
+    answered: set[str] = field(default_factory=set)
+
+
+def _message_id(context: RequestContext) -> str:
+    return str(getattr(getattr(context, "message", None), "message_id", "") or "")
+
+
+def _echoed_request_id(message: object) -> str:
+    """The request id a caller sent back, when it sent one."""
+    metadata = getattr(message, "metadata", None)
+    if metadata is None:
+        return ""
+    block = json_format.MessageToDict(metadata).get("a2acode_permission")
+    return str(block.get("request_id", "")) if isinstance(block, dict) else ""
 
 
 def _is_textual(media_type: str) -> bool:
@@ -338,8 +357,24 @@ class ClaudeCodeExecutor(AgentExecutor):
                 raise RuntimeError(
                     f"task {task_id} is already running and not awaiting input"
                 )
+            stream = self._streams.get(task_id)
+            asked = stream.asked if stream is not None else None
+            if (
+                stream is not None
+                and asked is not None
+                and self._answers_something_else(context, asked, stream)
+            ):
+                # A resend, or an answer naming an earlier request: applying it
+                # would decide a tool the caller was never shown. Restate what is
+                # actually waiting and leave the task where it is.
+                logger.warning("ignoring a misdirected answer to task %s", task_id)
+                await self._request_input(updater, asked)
+                return
             await updater.start_work()
             session.resolve(self._decision(context, session))
+            answered = _message_id(context)
+            if stream is not None and answered:
+                stream.answered.add(answered)
 
         await self._pump(updater, task_id, context_id, session)
 
@@ -425,6 +460,7 @@ class ClaudeCodeExecutor(AgentExecutor):
                             last_chunk=True,
                         )
                 elif isinstance(event, PermissionRequest):
+                    stream.asked = event
                     if stream.pending is not None:
                         stream.chunks.append(stream.pending)
                         await flush(stream.pending, last=False)
@@ -558,6 +594,22 @@ class ClaudeCodeExecutor(AgentExecutor):
                 [Part(text=text)], metadata={"a2acode_permission": permission}
             )
         )
+
+    @staticmethod
+    def _answers_something_else(
+        context: RequestContext, asked: PermissionRequest, stream: _Stream
+    ) -> bool:
+        """Whether this message is not an answer to the request now waiting.
+
+        A caller that echoes the ``request_id`` from the pause is held to it.
+        One that does not gets the weaker check: the same message settling a
+        second request is a resend, which a client retry or a double submit
+        produces on its own.
+        """
+        claimed = _echoed_request_id(getattr(context, "message", None))
+        if claimed:
+            return claimed != asked.request_id
+        return _message_id(context) in stream.answered
 
     @staticmethod
     def _decision(
