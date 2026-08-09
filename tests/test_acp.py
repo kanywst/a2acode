@@ -395,6 +395,29 @@ async def test_a_call_the_agent_never_returns_to_is_announced_at_end_of_turn():
 
 
 @pytest.mark.asyncio
+async def test_arguments_that_arrive_after_the_outcome_still_get_reported():
+    # The reverse order: the call completes before it says what it acted on, so
+    # it is announced bare and corrected once when the arguments turn up.
+    events = await _feed(
+        s.ToolCallStart(
+            session_update="tool_call", tool_call_id="t1", title="Read", kind="read"
+        ),
+        s.ToolCallProgress(
+            session_update="tool_call_update", tool_call_id="t1", status="completed"
+        ),
+        s.ToolCallProgress(
+            session_update="tool_call_update",
+            tool_call_id="t1",
+            raw_input={"file_path": "late.py"},
+        ),
+    )
+
+    uses = [e for e in events if isinstance(e, ToolUse)]
+    assert [u.tool_input for u in uses] == [{}, {"file_path": "late.py"}]
+    assert {u.tool_use_id for u in uses} == {"t1"}
+
+
+@pytest.mark.asyncio
 async def test_past_the_bound_a_call_is_mapped_as_it_came(monkeypatch):
     monkeypatch.setattr(acp_mod, "_MAX_TOOL_CALLS", 1)
     events = await _feed(

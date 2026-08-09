@@ -308,6 +308,9 @@ class _ToolCall:
     kind: Any = None
     raw_input: Any = None
     announced: bool = False
+    # Announced with nothing to say what it acts on, so arguments arriving later
+    # are still worth one correction.
+    bare: bool = False
 
 
 class _ToolCalls:
@@ -359,6 +362,18 @@ class _ToolCalls:
         if update.kind:
             call.kind = update.kind
         if call.announced:
+            if call.bare and isinstance(update.raw_input, Mapping) and update.raw_input:
+                # Content or an outcome can arrive before the arguments, and the
+                # call was announced on that. Correct it under the same id rather
+                # than leave a call that never says what it acted on.
+                call.bare = False
+                yield s.ToolCallStart(
+                    session_update="tool_call",
+                    tool_call_id=update.tool_call_id,
+                    title=call.title,
+                    kind=call.kind,
+                    raw_input=update.raw_input,
+                )
             yield update.model_copy(
                 update={"title": call.title or None, "kind": call.kind}
             )
@@ -370,6 +385,7 @@ class _ToolCalls:
         if not (call.raw_input or update.content or update.status in _TERMINAL):
             return
         call.announced = True
+        call.bare = not call.raw_input
         start = s.ToolCallStart(
             session_update="tool_call",
             tool_call_id=update.tool_call_id,
