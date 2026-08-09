@@ -169,6 +169,8 @@ An answer of `allow`, `yes`, `y`, `ok`, `approve`, `accept`, or `grant` — the 
 
 A denial carries the words it was written with, so `no, run pytest -x instead` can redirect the turn rather than merely refuse it. How far the reason travels is the agent protocol's call: the `claude` backend hands it to the agent, and so does a denied ACP terminal, but ACP's answer to an ordinary tool permission carries only the option chosen and has nowhere to put text.
 
+Some gates are not yes/no. Claude Code's end-of-plan gate offers three choices — accept the edits that follow, allow this once and keep gating, or keep planning — so the pause lists whatever the agent offered and the caller can answer with an option's id or name instead of `allow`. Without one, the answer still resolves to allow or deny as above.
+
 Whatever the agent decides needs approval becomes an `input-required` pause rather than being silently skipped or auto-approved; the caller, not the server, holds the decision. Read-only actions the agent already treats as safe still run without a prompt.
 
 The same gate covers commands. a2acode serves ACP's terminal capability, so an agent can run a build or a test suite through the server instead of shelling out on its own, and every one of those goes through the caller for approval first — the caller sees the exact command line, environment assignments included, before anything spawns. Without that gate, advertising the capability would have handed the agent a way *around* the permission model, since `terminal/create` is a direct client call and nothing in the protocol obliges an agent to ask permission first.

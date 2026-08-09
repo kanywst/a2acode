@@ -68,6 +68,7 @@ from .base import (
     FileChange,
     Notice,
     PermissionDecision,
+    PermissionOption,
     Plan,
     PlanStep,
     Result,
@@ -158,14 +159,20 @@ def events_from_update(update: object) -> Iterator[BackendEvent]:
             yield Notice(text=f"the agent titled this session {update.title!r}")
 
 
-def select_option(options: Sequence[s.PermissionOption], *, allow: bool) -> str | None:
-    """Pick the option id that matches the caller's allow/deny decision.
+def select_option(
+    options: Sequence[s.PermissionOption], *, allow: bool, option_id: str = ""
+) -> str | None:
+    """Pick the option id the caller's decision resolves to.
 
     ACP returns the binding choice as an ``optionId``; ``kind`` is only a UI
-    hint. Prefer a one-shot option (allow_once / reject_once) over a sticky one,
-    then fall back to any option of the right polarity. ``None`` means the agent
+    hint. A caller that named one of the offered options gets exactly that, since
+    a gate offering three choices cannot be answered with a bool. Otherwise
+    prefer a one-shot option (allow_once / reject_once) over a sticky one, then
+    fall back to any option of the right polarity. ``None`` means the agent
     offered no option of that polarity.
     """
+    if option_id and any(opt.option_id == option_id for opt in options):
+        return option_id
     preferred = (
         ("allow_once", "allow_always") if allow else ("reject_once", "reject_always")
     )
@@ -182,6 +189,13 @@ def select_option(options: Sequence[s.PermissionOption], *, allow: bool) -> str 
 
 def _as_dict(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _offered(options: Sequence[s.PermissionOption]) -> list[PermissionOption]:
+    return [
+        PermissionOption(option_id=o.option_id, name=o.name, kind=o.kind or "")
+        for o in options
+    ]
 
 
 def _command_line(command: str, argv: Sequence[str], env: Mapping[str, str]) -> str:
@@ -452,7 +466,11 @@ class _BridgeClient(Client):
         await asyncio.gather(*(t.close() for t in terminals), return_exceptions=True)
 
     async def _approve(
-        self, name: str, tool_input: dict[str, Any], description: str
+        self,
+        name: str,
+        tool_input: dict[str, Any],
+        description: str,
+        options: Sequence[s.PermissionOption] = (),
     ) -> PermissionDecision:
         """Put an action to the A2A caller, denying if nobody can answer."""
         if self._session is None:
@@ -460,7 +478,9 @@ class _BridgeClient(Client):
             return PermissionDecision(
                 request_id="", allow=False, message="no caller attached"
             )
-        return await self._session.request_permission(name, tool_input, description)
+        return await self._session.request_permission(
+            name, tool_input, description, _offered(options)
+        )
 
     def _safe_path(self, path: str) -> Path:
         target = Path(path)
@@ -496,8 +516,12 @@ class _BridgeClient(Client):
         **_: Any,
     ) -> s.RequestPermissionResponse:
         name = tool_call.title or (tool_call.kind or "tool")
-        decision = await self._approve(name, _as_dict(tool_call.raw_input), name)
-        option_id = select_option(options, allow=decision.allow)
+        decision = await self._approve(
+            name, _as_dict(tool_call.raw_input), name, options
+        )
+        option_id = select_option(
+            options, allow=decision.allow, option_id=decision.option_id
+        )
         if option_id is None:
             # The agent offered no option of the requested polarity; cancelling
             # is the only safe answer (selecting the wrong one could run a tool

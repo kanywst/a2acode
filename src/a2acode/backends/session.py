@@ -16,13 +16,18 @@ cancels the runner if that does not land.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
-from .base import BackendEvent, PermissionDecision, PermissionRequest
+from .base import (
+    BackendEvent,
+    PermissionDecision,
+    PermissionOption,
+    PermissionRequest,
+)
 
 
 @dataclass(slots=True)
@@ -49,6 +54,9 @@ class BackendSession:
         self._runner: asyncio.Task[None] | None = None
         self._canceller: Callable[[], Awaitable[None]] | None = None
         self.last_request_id: str | None = None
+        # What the parked request offered, so the consumer can let the caller
+        # name one of the agent's own options rather than only allow or deny.
+        self.last_options: list[PermissionOption] = []
         self.done = False
         # Set when the executor drops this session to free a capacity slot, so
         # the session's own consumer can fail its task instead of completing it
@@ -91,7 +99,11 @@ class BackendSession:
         await self._queue.put(event)
 
     async def request_permission(
-        self, tool_name: str, tool_input: dict[str, Any], description: str = ""
+        self,
+        tool_name: str,
+        tool_input: dict[str, Any],
+        description: str = "",
+        options: Sequence[PermissionOption] = (),
     ) -> PermissionDecision:
         request_id = uuid4().hex
         future: asyncio.Future[PermissionDecision] = (
@@ -99,7 +111,9 @@ class BackendSession:
         )
         self._pending[request_id] = future
         await self._queue.put(
-            PermissionRequest(request_id, tool_name, dict(tool_input), description)
+            PermissionRequest(
+                request_id, tool_name, dict(tool_input), description, list(options)
+            )
         )
         return await future
 
@@ -128,6 +142,7 @@ class BackendSession:
             yield item
             if isinstance(item, PermissionRequest):
                 self.last_request_id = item.request_id
+                self.last_options = item.options
                 return
 
     def abort(self) -> None:

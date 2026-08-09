@@ -517,6 +517,14 @@ def test_select_option_prefers_one_shot():
     assert select_option(_opts(), allow=False) == "r"
 
 
+def test_select_option_takes_the_option_the_caller_named():
+    # Plan mode's gate is three-way: allow_always here means "accept the edits
+    # that follow", which no bool can pick out.
+    assert select_option(_opts(), allow=True, option_id="A") == "A"
+    # An id the agent did not offer falls back rather than being passed on.
+    assert select_option(_opts(), allow=True, option_id="nope") == "a"
+
+
 def test_select_option_falls_back_to_always_when_no_once():
     opts = [s.PermissionOption(option_id="A", name="Always", kind="allow_always")]
     assert select_option(opts, allow=True) == "A"
@@ -527,9 +535,11 @@ class _FakeSession:
     def __init__(self, decision: PermissionDecision) -> None:
         self._decision = decision
         self.asked: tuple[str, dict, str] | None = None
+        self.offered: list = []
 
-    async def request_permission(self, name, tool_input, description):
+    async def request_permission(self, name, tool_input, description, options=()):
         self.asked = (name, tool_input, description)
+        self.offered = list(options)
         return self._decision
 
 
@@ -544,6 +554,34 @@ async def test_request_permission_allow_selects_allow_option():
     assert isinstance(resp.outcome, s.AllowedOutcome)
     assert resp.outcome.option_id == "a"
     assert session.asked == ("Run ls", {}, "Run ls")
+
+
+@pytest.mark.asyncio
+async def test_request_permission_offers_the_options_to_the_caller():
+    session = _FakeSession(PermissionDecision(request_id="x", allow=False))
+    client = _BridgeClient(session)  # type: ignore[arg-type]
+    tool_call = s.ToolCallUpdate(tool_call_id="t1", title="Ready to code?")
+
+    await client.request_permission("sess", tool_call, _opts())
+
+    assert [(o.option_id, o.kind) for o in session.offered] == [
+        ("a", "allow_once"),
+        ("A", "allow_always"),
+        ("r", "reject_once"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_request_permission_selects_the_option_the_caller_named():
+    session = _FakeSession(
+        PermissionDecision(request_id="x", allow=True, option_id="A")
+    )
+    client = _BridgeClient(session)  # type: ignore[arg-type]
+    tool_call = s.ToolCallUpdate(tool_call_id="t1", title="Ready to code?")
+
+    resp = await client.request_permission("sess", tool_call, _opts())
+
+    assert resp.outcome.option_id == "A"
 
 
 @pytest.mark.asyncio

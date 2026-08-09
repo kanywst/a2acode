@@ -102,22 +102,46 @@ class Notice:
 
 
 @dataclass(slots=True)
+class PermissionOption:
+    """One of the choices the agent offered for a permission request.
+
+    ``kind`` is ACP's hint at what the choice means (``allow_once``,
+    ``reject_once``, ...); ``option_id`` is what actually binds.
+    """
+
+    option_id: str
+    name: str = ""
+    kind: str = ""
+
+
+@dataclass(slots=True)
 class PermissionRequest:
-    """A tool needs the caller's approval before it can run."""
+    """A tool needs the caller's approval before it can run.
+
+    ``options`` is what the agent offered, when it offered anything: a plan-mode
+    gate is a three-way choice (accept the edits that follow, keep gating each
+    one, keep planning) that allow/deny cannot express.
+    """
 
     request_id: str
     tool_name: str
     tool_input: dict[str, Any]
     description: str = ""
+    options: list[PermissionOption] = field(default_factory=list)
 
 
 @dataclass(slots=True)
 class PermissionDecision:
-    """The caller's answer to a PermissionRequest."""
+    """The caller's answer to a PermissionRequest.
+
+    ``option_id`` names one of the offered options directly; without it the
+    answer resolves to whichever option matches ``allow``.
+    """
 
     request_id: str
     allow: bool
     message: str = ""
+    option_id: str = ""
 
 
 @dataclass(slots=True)
