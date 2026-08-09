@@ -539,7 +539,8 @@ class ClaudeCodeExecutor(AgentExecutor):
             text += f'\noptions, answered as "{_OPTION_PREFIX}<id>":'
             for option in event.options:
                 text += f"\n  {_shown(option.option_id)}"
-                text += f" [{option.kind or 'unspecified'}] {_shown(option.name)}"
+                text += f" [{_shown(option.kind or 'unspecified')}]"
+                text += f" {_shown(option.name)}"
         await updater.requires_input(
             message=updater.new_agent_message(
                 [Part(text=text)], metadata={"a2acode_permission": permission}

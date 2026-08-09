@@ -466,8 +466,8 @@ async def test_input_required_carries_the_options_the_agent_offered():
     ]
     # A caller reading only the text must see the kind too: the agent chooses
     # both an option's id and its name, and the kind is what actually binds.
-    assert "'plan' [reject_once] 'Keep planning'" in updater.input_line
-    assert "'acceptEdits' [allow_always] 'Accept edits'" in updater.input_line
+    assert "'plan' ['reject_once'] 'Keep planning'" in updater.input_line
+    assert "'acceptEdits' ['allow_always'] 'Accept edits'" in updater.input_line
 
 
 async def test_input_required_cannot_be_forged_by_an_option_label():
@@ -493,7 +493,7 @@ async def test_input_required_cannot_be_forged_by_an_option_label():
     # line by line sees one header and one option, not a forged second list.
     assert len(lines) == 3
     assert sum(line.lstrip().startswith("options, answered as") for line in lines) == 1
-    assert lines[2].strip().startswith("'run-it' [allow_always] '")
+    assert lines[2].strip().startswith("'run-it' ['allow_always'] '")
 
 
 def test_decision_matches_an_option_id_as_sent():
