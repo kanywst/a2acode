@@ -155,6 +155,40 @@ def test_a_task_whose_call_failed_never_enters_the_plan():
     assert _steps(plan) == [("do the safe thing", "pending")]
 
 
+def test_an_id_from_another_task_in_the_result_is_not_bound():
+    tracker = PlanTracker()
+    assert (
+        _call(
+            tracker,
+            "TaskCreate",
+            {"subject": "do it"},
+            "t1",
+            output="Blocked by task #7. Task #8 created successfully: do it",
+        )
+        is not None
+    )
+    # Binding to #7 would make an update for that unrelated task mutate this
+    # step, and leave every update for the real id going nowhere.
+    assert (
+        _call(tracker, "TaskUpdate", {"taskId": "7", "status": "completed"}, "t2")
+        is None
+    )
+    done = _call(tracker, "TaskUpdate", {"taskId": "8", "status": "completed"}, "t3")
+    assert _steps(done) == [("do it", "completed")]
+
+
+def test_a_whole_list_write_over_the_cap_keeps_its_head(monkeypatch):
+    monkeypatch.setattr(claude_mod, "_MAX_STEPS", 2)
+    plan = _call(
+        PlanTracker(),
+        "TodoWrite",
+        {"todos": [{"content": f"step {i}"} for i in range(4)]},
+        "t1",
+    )
+    # One call carries the whole list, so the entries to lose are the last.
+    assert _steps(plan) == [("step 0", "pending"), ("step 1", "pending")]
+
+
 def test_a_deleted_task_leaves_the_plan():
     tracker = PlanTracker()
     _create(tracker, "drop me", "t1", "1")
