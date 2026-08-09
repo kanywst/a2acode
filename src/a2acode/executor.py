@@ -210,6 +210,16 @@ class _Budget:
                 self.binary -= len(attachment.data)
 
 
+def _shown(value: str) -> str:
+    """Render an agent-supplied label as one quoted token.
+
+    An option's id and name are the agent's to choose, and they land in a block
+    the caller reads line by line to decide what it is approving. One carrying a
+    newline would otherwise forge a second list of options.
+    """
+    return repr(" ".join(value.split())[:80])
+
+
 def _describe_tool(event: ToolUse) -> str:
     """A short, human-readable line for a tool invocation."""
     i = event.tool_input
@@ -526,8 +536,10 @@ class ClaudeCodeExecutor(AgentExecutor):
                 {"id": o.option_id, "name": o.name, "kind": o.kind}
                 for o in event.options
             ]
-            offered = ", ".join(f"{o.option_id} ({o.name})" for o in event.options)
-            text += f'\noptions, answered as "{_OPTION_PREFIX}<id>": {offered}'
+            text += f'\noptions, answered as "{_OPTION_PREFIX}<id>":'
+            for option in event.options:
+                text += f"\n  {_shown(option.option_id)}"
+                text += f" [{option.kind or 'unspecified'}] {_shown(option.name)}"
         await updater.requires_input(
             message=updater.new_agent_message(
                 [Part(text=text)], metadata={"a2acode_permission": permission}
@@ -541,9 +553,12 @@ class ClaudeCodeExecutor(AgentExecutor):
         raw = (context.get_user_input() or "").strip()
         text = raw.lower()
         if text.startswith(_OPTION_PREFIX):
-            named = text.removeprefix(_OPTION_PREFIX).strip()
+            # Compared as sent: ACP option ids are opaque and case-sensitive, so
+            # folding case would let two ids differing only by case collide and
+            # leave the agent's ordering to pick between them.
+            named = raw[len(_OPTION_PREFIX) :].strip()
             for option in session.last_options:
-                if named and named == option.option_id.lower():
+                if named and named == option.option_id:
                     # The agent's own choice, taken as given: allow/deny cannot
                     # say "accept the edits that follow" or "keep planning".
                     return PermissionDecision(
