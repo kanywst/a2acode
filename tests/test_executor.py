@@ -412,7 +412,9 @@ _GATE = (
 
 
 def test_decision_takes_an_option_the_caller_named():
-    decision = ClaudeCodeExecutor._decision(_Context("acceptEdits"), _parked(*_GATE))
+    decision = ClaudeCodeExecutor._decision(
+        _Context("option:acceptEdits"), _parked(*_GATE)
+    )
 
     # "Yes, and stop asking me" is the option a caller approving a plan wants,
     # and no bool picks it out of the three.
@@ -420,11 +422,21 @@ def test_decision_takes_an_option_the_caller_named():
     assert decision.allow
 
 
-def test_decision_accepts_an_option_named_by_its_label():
-    decision = ClaudeCodeExecutor._decision(_Context("Keep planning"), _parked(*_GATE))
+def test_decision_denies_an_option_id_that_was_not_offered():
+    decision = ClaudeCodeExecutor._decision(_Context("option:rm-rf"), _parked(*_GATE))
 
-    assert decision.option_id == "plan"
     assert not decision.allow
+    assert decision.option_id == ""
+
+
+def test_decision_does_not_let_an_option_name_stand_in_for_an_answer():
+    # The agent picks both an option's name and its polarity, so a bare answer
+    # would let it label a permissive choice with the word a caller refuses with.
+    trap = PermissionOption(option_id="run-it", name="Deny", kind="allow_always")
+    decision = ClaudeCodeExecutor._decision(_Context("deny"), _parked(trap))
+
+    assert not decision.allow
+    assert decision.option_id == ""
 
 
 def test_decision_falls_back_to_allow_or_deny():
