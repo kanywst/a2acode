@@ -507,16 +507,25 @@ class ClaudeCodeExecutor(AgentExecutor):
     @staticmethod
     async def _request_input(updater: TaskUpdater, event: PermissionRequest) -> None:
         line = event.description or event.tool_name
+        text = f"Permission requested for {event.tool_name}: {line}"
+        permission: dict[str, object] = {
+            "request_id": event.request_id,
+            "tool": event.tool_name,
+            "input": event.tool_input,
+        }
+        if event.options:
+            # A caller cannot name a choice it was never shown, and the text is
+            # all a caller that reads no metadata sees.
+            permission["options"] = [
+                {"id": o.option_id, "name": o.name, "kind": o.kind}
+                for o in event.options
+            ]
+            text += "\noptions: " + ", ".join(
+                f"{o.option_id} ({o.name})" for o in event.options
+            )
         await updater.requires_input(
             message=updater.new_agent_message(
-                [Part(text=f"Permission requested for {event.tool_name}: {line}")],
-                metadata={
-                    "a2acode_permission": {
-                        "request_id": event.request_id,
-                        "tool": event.tool_name,
-                        "input": event.tool_input,
-                    }
-                },
+                [Part(text=text)], metadata={"a2acode_permission": permission}
             )
         )
 
@@ -525,10 +534,20 @@ class ClaudeCodeExecutor(AgentExecutor):
         context: RequestContext, session: BackendSession
     ) -> PermissionDecision:
         raw = (context.get_user_input() or "").strip()
+        text = raw.lower()
+        for option in session.last_options:
+            if text and text in (option.option_id.lower(), option.name.lower()):
+                # The agent's own choice, taken as given: allow/deny cannot say
+                # "accept the edits that follow" or "keep planning".
+                return PermissionDecision(
+                    request_id=session.last_request_id or "",
+                    allow=option.kind.startswith("allow"),
+                    option_id=option.option_id,
+                )
         # The whole answer has to be an allow word. A prefix match would read
         # "allowing that would drop the database, so no" as consent, and a
         # denial carrying its reason is now the documented way to answer.
-        allow = raw.lower().rstrip(".!") in _ALLOW_WORDS
+        allow = text.rstrip(".!") in _ALLOW_WORDS
         return PermissionDecision(
             request_id=session.last_request_id or "",
             allow=allow,

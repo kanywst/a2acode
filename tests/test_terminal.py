@@ -25,7 +25,7 @@ class _FakeSession:
         self._allow = allow
         self.asked: list[tuple[str, dict, str]] = []
 
-    async def request_permission(self, name, tool_input, description):
+    async def request_permission(self, name, tool_input, description, options=()):
         self.asked.append((name, tool_input, description))
         return PermissionDecision(
             request_id="x", allow=self._allow, message="" if self._allow else "nope"

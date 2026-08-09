@@ -10,6 +10,8 @@ from a2acode import executor as executor_mod
 from a2acode.backends import (
     BackendSession,
     Notice,
+    PermissionOption,
+    PermissionRequest,
     Plan,
     PlanStep,
     RunRequest,
@@ -119,9 +121,15 @@ class _RecordingUpdater:
         self.status_lines: list[str] = []
         self.artifacts: list[tuple[str | None, str]] = []
         self.artifact_ids: list[str | None] = []
+        self.metadata: dict | None = None
+        self.input_line = ""
 
     def new_agent_message(self, parts, metadata=None):
+        self.metadata = metadata
         return parts
+
+    async def requires_input(self, message=None):
+        self.input_line = "".join(p.text for p in message or [])
 
     async def add_artifact(self, parts, *, name=None, artifact_id=None, **_kwargs):
         self.artifacts.append((name, "".join(p.text for p in parts)))
@@ -377,6 +385,75 @@ def test_decision_forgives_trailing_punctuation():
 
 def test_decision_leaves_a_bare_deny_to_the_backend_wording():
     assert _decide("").message == ""
+
+
+class _Context:
+    """The slice of RequestContext that _decision reads."""
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+
+    def get_user_input(self) -> str:
+        return self._text
+
+
+def _parked(*options) -> BackendSession:
+    session = BackendSession()
+    session.last_request_id = "req-1"
+    session.last_options = list(options)
+    return session
+
+
+_GATE = (
+    PermissionOption(option_id="acceptEdits", name="Accept edits", kind="allow_always"),
+    PermissionOption(option_id="default", name="Allow", kind="allow_once"),
+    PermissionOption(option_id="plan", name="Keep planning", kind="reject_once"),
+)
+
+
+def test_decision_takes_an_option_the_caller_named():
+    decision = ClaudeCodeExecutor._decision(_Context("acceptEdits"), _parked(*_GATE))
+
+    # "Yes, and stop asking me" is the option a caller approving a plan wants,
+    # and no bool picks it out of the three.
+    assert decision.option_id == "acceptEdits"
+    assert decision.allow
+
+
+def test_decision_accepts_an_option_named_by_its_label():
+    decision = ClaudeCodeExecutor._decision(_Context("Keep planning"), _parked(*_GATE))
+
+    assert decision.option_id == "plan"
+    assert not decision.allow
+
+
+def test_decision_falls_back_to_allow_or_deny():
+    assert ClaudeCodeExecutor._decision(_Context("allow"), _parked(*_GATE)).allow
+    denied = ClaudeCodeExecutor._decision(_Context("no thanks"), _parked(*_GATE))
+    assert not denied.allow
+    assert denied.option_id == ""
+
+
+async def test_input_required_carries_the_options_the_agent_offered():
+    updater = _RecordingUpdater()
+    await ClaudeCodeExecutor._request_input(
+        updater,
+        PermissionRequest(
+            request_id="r1",
+            tool_name="ExitPlanMode",
+            tool_input={},
+            description="Ready to code?",
+            options=list(_GATE),
+        ),
+    )
+
+    assert updater.metadata["a2acode_permission"]["options"] == [
+        {"id": "acceptEdits", "name": "Accept edits", "kind": "allow_always"},
+        {"id": "default", "name": "Allow", "kind": "allow_once"},
+        {"id": "plan", "name": "Keep planning", "kind": "reject_once"},
+    ]
+    # A caller reading only the text must still see what it can answer.
+    assert "plan (Keep planning)" in updater.input_line
 
 
 async def test_pump_fails_an_evicted_session():
