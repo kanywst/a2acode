@@ -72,7 +72,7 @@ _PLAN_TOOLS = (_TODO_TOOL, _TASK_CREATE, _TASK_UPDATE)
 
 # "Task #1 created successfully: ..." - a created task's id is reported by its
 # result, not by the call, and TaskUpdate addresses it by that id.
-_TASK_ID = re.compile(r"#(\w+)")
+_TASK_ID = re.compile(r"[Tt]ask #(\w+)")
 
 
 def events_from_message(message: object) -> Iterator[BackendEvent]:
