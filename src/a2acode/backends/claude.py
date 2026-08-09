@@ -186,6 +186,7 @@ class PlanTracker:
         if not tasks:
             return None
         self._tasks, self._keys = tasks, {}
+        _bound(self._tasks, _MAX_STEPS)
         return self._plan()
 
     def _create(
