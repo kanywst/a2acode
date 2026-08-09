@@ -12,6 +12,7 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
+from a2acode.backends import claude as claude_mod
 from a2acode.backends.base import (
     FileChange,
     Plan,
@@ -241,6 +242,42 @@ def test_tool_result_output_is_capped():
 def test_empty_text_block_is_skipped():
     message = AssistantMessage(content=[TextBlock(text="")], model="claude-test")
     assert list(events_from_message(message)) == []
+
+
+def test_a_resumed_turn_keeps_working_the_same_task_list():
+    backend = ClaudeBackend()
+    first = RunRequest(prompt="start", context_id="ctx-1")
+    tracker = backend._plan_for(first)
+    _create(tracker, "read the code", "t1", "1")
+
+    # A resumed turn addresses a task by an id only the turn that created it saw.
+    resumed = backend._plan_for(
+        RunRequest(prompt="carry on", context_id="ctx-1", resume="sess-1")
+    )
+    plan = _call(resumed, "TaskUpdate", {"taskId": "1", "status": "completed"}, "t9")
+    assert _steps(plan) == [("read the code", "completed")]
+
+
+def test_a_turn_without_a_resume_starts_the_list_over():
+    backend = ClaudeBackend()
+    tracker = backend._plan_for(RunRequest(prompt="start", context_id="ctx-1"))
+    _create(tracker, "read the code", "t1", "1")
+
+    # No resume means a fresh Claude conversation, so an earlier list is not what
+    # the agent is working from.
+    fresh = backend._plan_for(RunRequest(prompt="again", context_id="ctx-1"))
+    assert (
+        _call(fresh, "TaskUpdate", {"taskId": "1", "status": "completed"}, "t9") is None
+    )
+
+
+def test_kept_task_lists_are_bounded(monkeypatch):
+    monkeypatch.setattr(claude_mod, "_MAX_PLANS", 2)
+    backend = ClaudeBackend()
+    for context in ("a", "b", "c"):
+        backend._plan_for(RunRequest(prompt="hi", context_id=context))
+
+    assert set(backend._plans) == {"b", "c"}
 
 
 def test_options_applies_settings():
