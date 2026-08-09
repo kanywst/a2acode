@@ -165,7 +165,7 @@ uv run a2acode call "sudo reboot"
 uv run a2acode call "allow" --task <id> --context <id>
 ```
 
-`allow` (or `yes`, `approve`, `ok`) approves; anything else denies. The agent session stays alive across the pause, so it resumes exactly where it stopped. Over ACP this is the agent's `session/request_permission` call answered from the A2A caller's reply; with the `claude` backend it routes through the Claude SDK's `can_use_tool`.
+`allow` (or `yes`, `approve`, `ok`) approves; anything else denies, and whatever the caller wrote is handed to the agent as the reason, so `no, run pytest -x instead` redirects the turn rather than merely refusing it. The agent session stays alive across the pause, so it resumes exactly where it stopped. Over ACP this is the agent's `session/request_permission` call answered from the A2A caller's reply; with the `claude` backend it routes through the Claude SDK's `can_use_tool`.
 
 Whatever the agent decides needs approval becomes an `input-required` pause rather than being silently skipped or auto-approved; the caller, not the server, holds the decision. Read-only actions the agent already treats as safe still run without a prompt.
 

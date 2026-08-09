@@ -524,12 +524,16 @@ class ClaudeCodeExecutor(AgentExecutor):
     def _decision(
         context: RequestContext, session: BackendSession
     ) -> PermissionDecision:
-        text = (context.get_user_input() or "").strip().lower()
+        raw = (context.get_user_input() or "").strip()
+        text = raw.lower()
         allow = text in _ALLOW_WORDS or text.startswith("allow")
         return PermissionDecision(
             request_id=session.last_request_id or "",
             allow=allow,
-            message="" if allow else "Denied by A2A caller",
+            # A denial steers the agent ("not that, run pytest -x"), so send the
+            # caller's own words, unflattened by the allow-word lowercasing. The
+            # backends supply their own wording when a bare deny leaves it empty.
+            message="" if allow else raw,
         )
 
     def _remember_session(self, context_id: str, session_id: str) -> None:

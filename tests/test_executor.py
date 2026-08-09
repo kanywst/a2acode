@@ -327,6 +327,42 @@ async def test_cancelling_a_running_task_leaves_the_state_to_its_pump():
     assert not updater.did_cancel
 
 
+class _Context:
+    """The slice of RequestContext that _decision reads."""
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+
+    def get_user_input(self) -> str:
+        return self._text
+
+
+def _decide(text: str):
+    session = BackendSession()
+    session.last_request_id = "req-1"
+    return ClaudeCodeExecutor._decision(_Context(text), session)  # type: ignore[arg-type]
+
+
+def test_decision_approves_on_an_allow_word():
+    decision = _decide("  Allow  ")
+    assert decision.allow
+    assert decision.request_id == "req-1"
+    assert decision.message == ""
+
+
+def test_decision_hands_the_agent_the_words_the_caller_denied_with():
+    decision = _decide("No, run pytest -x instead")
+
+    assert not decision.allow
+    # Denying with guidance is most of what makes a denial useful, and the
+    # casing is the caller's, not the lowercased copy the allow match uses.
+    assert decision.message == "No, run pytest -x instead"
+
+
+def test_decision_leaves_a_bare_deny_to_the_backend_wording():
+    assert _decide("").message == ""
+
+
 async def test_pump_fails_an_evicted_session():
     # A session that finished (its runner returned, queuing the done sentinel)
     # but was flagged evicted: _pump must fail the task, not complete it with the
