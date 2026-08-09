@@ -34,6 +34,7 @@ from a2acode.backends.base import (
     FileChange,
     Notice,
     PermissionDecision,
+    PermissionOption,
     Plan,
     RunRequest,
     TextDelta,
@@ -535,7 +536,7 @@ class _FakeSession:
     def __init__(self, decision: PermissionDecision) -> None:
         self._decision = decision
         self.asked: tuple[str, dict, str] | None = None
-        self.offered: list = []
+        self.offered: list[PermissionOption] = []
 
     async def request_permission(self, name, tool_input, description, options=()):
         self.asked = (name, tool_input, description)

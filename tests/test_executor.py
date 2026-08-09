@@ -121,7 +121,7 @@ class _RecordingUpdater:
         self.status_lines: list[str] = []
         self.artifacts: list[tuple[str | None, str]] = []
         self.artifact_ids: list[str | None] = []
-        self.metadata: dict | None = None
+        self.metadata: dict[str, object] | None = None
         self.input_line = ""
 
     def new_agent_message(self, parts, metadata=None):
@@ -464,10 +464,29 @@ async def test_input_required_carries_the_options_the_agent_offered():
         {"id": "default", "name": "Allow", "kind": "allow_once"},
         {"id": "plan", "name": "Keep planning", "kind": "reject_once"},
     ]
-    # A caller reading only the text must see the kind too: the agent chooses
-    # both an option's id and its name, and the kind is what actually binds.
+    # A caller reading only the text must see the kind too: the id is what binds,
+    # and the kind is the only thing saying what picking it would mean.
     assert "'plan' ['reject_once'] 'Keep planning'" in updater.input_line
     assert "'acceptEdits' ['allow_always'] 'Accept edits'" in updater.input_line
+
+
+async def test_input_required_strips_escapes_from_what_the_agent_named():
+    # A terminal acts on an escape sequence rather than printing it, so one in a
+    # tool's title could redraw the line over the command being approved.
+    updater = _RecordingUpdater()
+    await ClaudeCodeExecutor._request_input(
+        updater,
+        PermissionRequest(
+            request_id="r1",
+            tool_name="Terminal",
+            tool_input={},
+            description="\x1b[2K\x1b[Gsomething harmless",
+            options=[PermissionOption(option_id="ok", name="Allow", kind="allow_once")],
+        ),
+    )
+
+    assert "\x1b" not in updater.input_line
+    assert "\\x1b[2K" in updater.input_line
 
 
 async def test_input_required_cannot_be_forged_by_an_option_label():
