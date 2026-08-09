@@ -456,14 +456,21 @@ async def test_past_the_bound_a_call_is_mapped_as_it_came(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_a_diff_is_not_replayed_by_the_updates_that_follow_it():
+async def test_a_diff_is_not_replayed_by_the_correction_that_follows_it():
+    # The diff arrives before the arguments do, so the call is announced bare on
+    # its content and corrected later. The correction must not carry the content
+    # with it, or the caller gets the same file change twice.
     events = await _feed(
         s.ToolCallStart(
             session_update="tool_call",
             tool_call_id="t1",
             title="Write a.py",
-            raw_input={"file_path": "a.py"},
             content=[tool_diff_content(path="a.py", new_text="y\n", old_text="x\n")],
+        ),
+        s.ToolCallProgress(
+            session_update="tool_call_update",
+            tool_call_id="t1",
+            raw_input={"file_path": "a.py"},
         ),
         s.ToolCallProgress(
             session_update="tool_call_update",
@@ -474,6 +481,35 @@ async def test_a_diff_is_not_replayed_by_the_updates_that_follow_it():
     )
 
     assert len([e for e in events if isinstance(e, FileChange)]) == 1
+    uses = [e for e in events if isinstance(e, ToolUse)]
+    assert [u.tool_input for u in uses] == [{}, {"file_path": "a.py"}]
+
+
+@pytest.mark.asyncio
+async def test_a_new_turn_does_not_inherit_the_last_turns_calls():
+    session = _Emitting()
+    client = _BridgeClient(session)  # type: ignore[arg-type]
+    await client.session_update(
+        "sess",
+        s.ToolCallStart(session_update="tool_call", tool_call_id="t1", title="Read"),
+    )
+    await client.unbind()
+    assert client._tool_calls._calls == {}
+
+    # Turn two, same connection: an update for a stale id opens a fresh call
+    # rather than folding onto one the previous turn held.
+    client.bind(session)  # type: ignore[arg-type]
+    await client.session_update(
+        "sess",
+        s.ToolCallProgress(
+            session_update="tool_call_update",
+            tool_call_id="t1",
+            raw_input={"file_path": "a.py"},
+        ),
+    )
+    assert [e.tool_input for e in session.events if isinstance(e, ToolUse)] == [
+        {"file_path": "a.py"}
+    ]
 
 
 def test_select_option_prefers_one_shot():
