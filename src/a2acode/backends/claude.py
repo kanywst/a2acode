@@ -70,6 +70,9 @@ _TASK_CREATE = "TaskCreate"
 _TASK_UPDATE = "TaskUpdate"
 _PLAN_TOOLS = (_TODO_TOOL, _TASK_CREATE, _TASK_UPDATE)
 
+# Contexts whose task list is kept between turns.
+_MAX_PLANS = 256
+
 # "Task #1 created successfully: ..." - a created task's id is reported by its
 # result, not by the call, and TaskUpdate addresses it by that id.
 _TASK_ID = re.compile(r"[Tt]ask #(\w+)")
@@ -256,6 +259,24 @@ class ClaudeBackend:
         self.setting_sources: list[SettingSource] = (
             [] if setting_sources is None else setting_sources
         )
+        # One task list per A2A context, bounded oldest-first. A resumed turn
+        # keeps working the list an earlier turn built, and TaskUpdate addresses
+        # a task by an id only the turn that created it saw.
+        self._plans: dict[str, PlanTracker] = {}
+
+    def _plan_for(self, request: RunRequest) -> PlanTracker:
+        context_id = request.context_id
+        if context_id is None:
+            return PlanTracker()
+        # Only a resumed turn inherits one: without a resume the agent gets a
+        # fresh conversation, so an earlier list is not what it is working from.
+        tracker = self._plans.pop(context_id, None) if request.resume else None
+        tracker = tracker or PlanTracker()
+        # Pop-then-set so a reused context moves off the eviction front.
+        self._plans[context_id] = tracker
+        while len(self._plans) > _MAX_PLANS:
+            del self._plans[next(iter(self._plans))]
+        return tracker
 
     def _options(self, request: RunRequest, can_use_tool) -> ClaudeAgentOptions:
         options = ClaudeAgentOptions(
@@ -288,7 +309,7 @@ class ClaudeBackend:
             )
 
         options = self._options(request, can_use_tool)
-        plan = PlanTracker()
+        plan = self._plan_for(request)
         async with ClaudeSDKClient(options=options) as client:
             await client.query(append_to_prompt(request.prompt, request.attachments))
             async for message in client.receive_response():
