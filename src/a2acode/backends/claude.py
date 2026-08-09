@@ -68,6 +68,7 @@ _MAX_TOOL_OUTPUT = 2000
 _TODO_TOOL = "TodoWrite"
 _TASK_CREATE = "TaskCreate"
 _TASK_UPDATE = "TaskUpdate"
+_PLAN_TOOLS = (_TODO_TOOL, _TASK_CREATE, _TASK_UPDATE)
 
 # "Task #1 created successfully: ..." - a created task's id is reported by its
 # result, not by the call, and TaskUpdate addresses it by that id.
@@ -122,26 +123,38 @@ class PlanTracker:
     was a whole plan; TaskCreate and TaskUpdate each change one entry, so the
     list lives here and every change replays it. ACP models the same thing as a
     first-class session update, which is where the two backends converge.
+
+    A change lands when its call has succeeded: a call the caller denied would
+    otherwise leave the plan showing work the agent never took on.
     """
 
     def __init__(self) -> None:
         # Keyed by the tool call that created the entry: a handle we have before
         # the task reports an id of its own, and ordered by creation.
         self._tasks: dict[str, _Task] = {}
+        # Plan calls still waiting on their result.
+        self._calls: dict[str, tuple[str, dict[str, Any]]] = {}
         self._keys: dict[str, str] = {}
 
     def absorb(self, event: BackendEvent) -> Plan | None:
         """Fold one event in, returning the plan when it changed."""
         if isinstance(event, ToolUse):
-            if event.name == _TODO_TOOL:
-                return self._todos(event.tool_input)
-            if event.name == _TASK_CREATE:
-                return self._create(event.tool_input, event.tool_use_id)
-            if event.name == _TASK_UPDATE:
-                return self._update(event.tool_input)
+            if event.name in _PLAN_TOOLS:
+                self._calls[event.tool_use_id] = (event.name, event.tool_input)
         elif isinstance(event, ToolResult):
-            self._bind(event.tool_use_id, event.output)
+            return self._apply(event)
         return None
+
+    def _apply(self, event: ToolResult) -> Plan | None:
+        call = self._calls.pop(event.tool_use_id, None)
+        if call is None or event.failed:
+            return None
+        name, tool_input = call
+        if name == _TODO_TOOL:
+            return self._todos(tool_input)
+        if name == _TASK_CREATE:
+            return self._create(tool_input, event.tool_use_id, event.output)
+        return self._update(tool_input)
 
     def _todos(self, tool_input: dict[str, Any]) -> Plan | None:
         todos = tool_input.get("todos")
@@ -160,11 +173,17 @@ class PlanTracker:
         self._tasks, self._keys = tasks, {}
         return self._plan()
 
-    def _create(self, tool_input: dict[str, Any], tool_use_id: str) -> Plan | None:
+    def _create(
+        self, tool_input: dict[str, Any], tool_use_id: str, output: str
+    ) -> Plan | None:
         subject = str(tool_input.get("subject") or "").strip()
         if not subject:
             return None
         self._tasks[tool_use_id] = _Task(content=subject)
+        # The id TaskUpdate will address it by is reported here, not by the call.
+        found = _TASK_ID.search(output)
+        if found:
+            self._keys[found.group(1)] = tool_use_id
         return self._plan()
 
     def _update(self, tool_input: dict[str, Any]) -> Plan | None:
@@ -179,12 +198,6 @@ class PlanTracker:
             task.status = status or task.status
             task.content = str(tool_input.get("subject") or task.content)
         return self._plan()
-
-    def _bind(self, tool_use_id: str, output: str) -> None:
-        """Learn the id a created task answers to, from its own result."""
-        found = _TASK_ID.search(output) if tool_use_id in self._tasks else None
-        if found:
-            self._keys[found.group(1)] = tool_use_id
 
     def _plan(self) -> Plan:
         return Plan(
