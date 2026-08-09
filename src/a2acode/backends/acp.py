@@ -337,8 +337,8 @@ class _ToolCalls:
         for call_id, call in self._calls.items():
             if not call.announced:
                 call.announced = True
-                # Announced with nothing to name, so arguments straggling in past
-                # the drain timeout still get their one correction.
+                # True by construction: a call reaches the flush precisely
+                # because it never said what it acts on.
                 call.bare = True
                 yield s.ToolCallStart(
                     session_update="tool_call",
@@ -438,6 +438,9 @@ class _BridgeClient(Client):
 
     async def unbind(self) -> None:
         self._session = None
+        # Tool calls belong to the turn that opened them, like the terminals
+        # below: a pooled agent would otherwise sit idle holding the last one's.
+        self._tool_calls = _ToolCalls()
         # Terminals belong to the turn that opened them. An agent is meant to
         # release its own, but a crashed or cancelled one would otherwise leave
         # processes running on the server with nobody to reap them.
