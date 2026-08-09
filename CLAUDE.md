@@ -69,6 +69,8 @@ Every backend speaks the same event vocabulary, and the executor maps each onto 
 
 `ToolResult` is optional in both protocols — an agent may never report a terminal status — so the executor treats a missing one as "no outcome reported" rather than assuming success, and resolves the tool's name against the earlier `ToolUse`. `Notice` is the one event the agent does not produce: it is the server telling the caller it had to run the turn differently than asked (a resume the agent cannot honour).
 
+`Plan` is the one event the `claude` backend has to build rather than translate: Claude's task list *is* the plan and it arrives as tool calls that change one entry at a time, so `PlanTracker` accumulates it across the run (a created task's id comes back in its result, not its call). `TodoWrite`, which wrote the whole list in one call, still works for older CLIs.
+
 `RunRequest` carries the caller's `Attachment`s alongside the prompt; `attach.py` renders them into prompt text, and a backend that can pass a part natively (an ACP agent advertising image support) handles that one itself first.
 
 A `Backend` is a `Protocol` (`name` + `async drive(session, request)`), so any object with that shape qualifies. A backend that holds resources across runs also implements `ClosableBackend` (`aclose`), which `build_app` calls on shutdown.
