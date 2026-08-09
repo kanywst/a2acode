@@ -393,6 +393,21 @@ async def test_a_call_the_agent_never_returns_to_is_announced_at_end_of_turn():
     await client.flush_tool_calls()
     assert len(session.events) == 1
 
+    # A flushed call was announced bare, so arguments arriving after the drain
+    # timeout still correct it.
+    await client.session_update(
+        "sess",
+        s.ToolCallProgress(
+            session_update="tool_call_update",
+            tool_call_id="t3",
+            raw_input={"url": "late"},
+        ),
+    )
+    assert [e.tool_input for e in session.events if isinstance(e, ToolUse)] == [
+        {},
+        {"url": "late"},
+    ]
+
 
 @pytest.mark.asyncio
 async def test_arguments_that_arrive_after_the_outcome_still_get_reported():
