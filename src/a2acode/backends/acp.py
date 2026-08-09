@@ -334,7 +334,9 @@ class _ToolCalls:
 
     def flush(self) -> Iterator[s.ToolCallStart]:
         """Announce, at end of turn, calls the agent never said more about."""
-        for call_id, call in self._calls.items():
+        # Snapshotted, like unbind does for terminals: nothing should be able to
+        # fold a new call in mid-flush, and this does not rely on that holding.
+        for call_id, call in list(self._calls.items()):
             if not call.announced:
                 call.announced = True
                 # True by construction: a call reaches the flush precisely
