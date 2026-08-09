@@ -271,6 +271,25 @@ def test_a_turn_without_a_resume_starts_the_list_over():
     )
 
 
+def test_one_lists_steps_are_bounded(monkeypatch):
+    # A context can be resumed for as long as the server runs.
+    monkeypatch.setattr(claude_mod, "_MAX_STEPS", 2)
+    tracker = PlanTracker()
+    for i in range(3):
+        _create(tracker, f"step {i}", f"t{i}", str(i))
+
+    assert _steps(tracker._plan()) == [("step 1", "pending"), ("step 2", "pending")]
+
+
+def test_calls_still_waiting_on_a_result_are_bounded(monkeypatch):
+    monkeypatch.setattr(claude_mod, "_MAX_PENDING", 1)
+    tracker = PlanTracker()
+    for i in range(3):
+        tracker.absorb(ToolUse("TaskCreate", {"subject": f"step {i}"}, f"t{i}"))
+
+    assert len(tracker._calls) == 1
+
+
 def test_kept_task_lists_are_bounded(monkeypatch):
     monkeypatch.setattr(claude_mod, "_MAX_PLANS", 2)
     backend = ClaudeBackend()
