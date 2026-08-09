@@ -92,6 +92,23 @@ class FakeAgent:
                 ),
             )
 
+        if "peek" in text:
+            # A tool call the way a real agent reports one: announced before its
+            # arguments are parsed, refined twice, then completed.
+            await self._update(
+                session_id, acp.start_tool_call("t4", "Read File", kind="read")
+            )
+            await self._update(
+                session_id,
+                acp.update_tool_call(
+                    "t4", title="Read app.py", raw_input={"file_path": "app.py"}
+                ),
+            )
+            await self._update(session_id, acp.update_tool_call("t4"))
+            await self._update(
+                session_id, acp.update_tool_call("t4", status="completed")
+            )
+
         if "boom" in text:
             await self._update(
                 session_id,
