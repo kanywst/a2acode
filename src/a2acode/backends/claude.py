@@ -78,8 +78,10 @@ _MAX_STEPS = 256
 _MAX_PENDING = 64
 
 # "Task #1 created successfully: ..." - a created task's id is reported by its
-# result, not by the call, and TaskUpdate addresses it by that id.
-_TASK_ID = re.compile(r"[Tt]ask #(\w+)")
+# result, not by the call, and TaskUpdate addresses it by that id. The creation
+# wording is required: a result mentioning another task first ("Blocked by task
+# #7. Task #8 created") would otherwise bind this step to that one.
+_TASK_ID = re.compile(r"[Tt]ask #(\w+) created")
 
 
 def events_from_message(message: object) -> Iterator[BackendEvent]:
@@ -180,13 +182,14 @@ class PlanTracker:
                 content=str(todo.get("content")),
                 status=str(todo.get("status") or "pending"),
             )
-            for i, todo in enumerate(todos)
+            for i, todo in enumerate(todos[:_MAX_STEPS])
             if isinstance(todo, dict) and todo.get("content")
         }
         if not tasks:
             return None
+        # Capped at the head: one call carries the whole list, so the entries to
+        # lose are the last ones, not the first.
         self._tasks, self._keys = tasks, {}
-        _bound(self._tasks, _MAX_STEPS)
         return self._plan()
 
     def _create(
