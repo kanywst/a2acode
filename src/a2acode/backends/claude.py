@@ -5,6 +5,10 @@ normalizes its typed message stream into backend events. Tool calls, file edits,
 run cost, and the session id: everything the "text in, text out" wrappers
 discard is preserved for the A2A layer to map onto the protocol.
 
+The agent's plan is not a message either: the task list is the plan, and it
+arrives as tool calls that change one entry at a time, so ``PlanTracker`` holds
+it across the run.
+
 Permission prompts are routed through ``can_use_tool`` into the session's
 ``request_permission``, so the caller approves or denies a tool over A2A instead
 of the server skipping it.
@@ -18,7 +22,9 @@ serving.
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Iterator
+from dataclasses import dataclass
 from typing import Any
 
 from claude_agent_sdk import (
@@ -56,8 +62,16 @@ from .session import BackendSession
 # run or file dump.
 _MAX_TOOL_OUTPUT = 2000
 
-# The tool whose input carries Claude's plan for the turn.
-_PLAN_TOOL = "TodoWrite"
+# The tools whose calls carry Claude's plan for the turn. TodoWrite wrote the
+# whole list in one call; the task tools that replaced it mutate one entry each,
+# so the list has to be kept across calls rather than read off a single input.
+_TODO_TOOL = "TodoWrite"
+_TASK_CREATE = "TaskCreate"
+_TASK_UPDATE = "TaskUpdate"
+
+# "Task #1 created successfully: ..." - a created task's id is reported by its
+# result, not by the call, and TaskUpdate addresses it by that id.
+_TASK_ID = re.compile(r"#(\w+)")
 
 
 def events_from_message(message: object) -> Iterator[BackendEvent]:
@@ -78,8 +92,6 @@ def events_from_message(message: object) -> Iterator[BackendEvent]:
                 tool_input = dict(block.input or {})
                 yield ToolUse(block.name, tool_input, block.id)
                 yield from file_changes(block.name, tool_input)
-                if block.name == _PLAN_TOOL:
-                    yield from _plan_from_todos(tool_input)
     elif isinstance(message, UserMessage):
         # Tool results come back as a user message: this is where the run says
         # whether the tool the caller just watched start actually succeeded.
@@ -96,27 +108,91 @@ def events_from_message(message: object) -> Iterator[BackendEvent]:
         )
 
 
-def _plan_from_todos(tool_input: dict[str, Any]) -> Iterator[Plan]:
-    """Derive the agent's plan from a TodoWrite call.
+@dataclass
+class _Task:
+    content: str
+    status: str = "pending"
 
-    The Claude SDK has no plan message of its own; the todo list *is* the plan,
-    and it arrives as the input to a tool call. ACP models the same thing as a
-    first-class session update, so this is where the two backends converge on
-    one event.
+
+class PlanTracker:
+    """The agent's task list, accumulated across the calls that change it.
+
+    The Claude SDK has no plan message of its own: the task list *is* the plan
+    and it arrives as tool calls. One TodoWrite carried the whole list, so a call
+    was a whole plan; TaskCreate and TaskUpdate each change one entry, so the
+    list lives here and every change replays it. ACP models the same thing as a
+    first-class session update, which is where the two backends converge.
     """
-    todos = tool_input.get("todos")
-    if not isinstance(todos, list):
-        return
-    steps = [
-        PlanStep(
-            content=str(todo.get("content")),
-            status=str(todo.get("status") or "pending"),
+
+    def __init__(self) -> None:
+        # Keyed by the tool call that created the entry: a handle we have before
+        # the task reports an id of its own, and ordered by creation.
+        self._tasks: dict[str, _Task] = {}
+        self._keys: dict[str, str] = {}
+
+    def absorb(self, event: BackendEvent) -> Plan | None:
+        """Fold one event in, returning the plan when it changed."""
+        if isinstance(event, ToolUse):
+            if event.name == _TODO_TOOL:
+                return self._todos(event.tool_input)
+            if event.name == _TASK_CREATE:
+                return self._create(event.tool_input, event.tool_use_id)
+            if event.name == _TASK_UPDATE:
+                return self._update(event.tool_input)
+        elif isinstance(event, ToolResult):
+            self._bind(event.tool_use_id, event.output)
+        return None
+
+    def _todos(self, tool_input: dict[str, Any]) -> Plan | None:
+        todos = tool_input.get("todos")
+        if not isinstance(todos, list):
+            return None
+        tasks = {
+            f"todo:{i}": _Task(
+                content=str(todo.get("content")),
+                status=str(todo.get("status") or "pending"),
+            )
+            for i, todo in enumerate(todos)
+            if isinstance(todo, dict) and todo.get("content")
+        }
+        if not tasks:
+            return None
+        self._tasks, self._keys = tasks, {}
+        return self._plan()
+
+    def _create(self, tool_input: dict[str, Any], tool_use_id: str) -> Plan | None:
+        subject = str(tool_input.get("subject") or "").strip()
+        if not subject:
+            return None
+        self._tasks[tool_use_id] = _Task(content=subject)
+        return self._plan()
+
+    def _update(self, tool_input: dict[str, Any]) -> Plan | None:
+        key = self._keys.get(str(tool_input.get("taskId") or ""))
+        task = self._tasks.get(key) if key else None
+        if key is None or task is None:
+            return None
+        status = str(tool_input.get("status") or "")
+        if status == "deleted":
+            del self._tasks[key]
+        else:
+            task.status = status or task.status
+            task.content = str(tool_input.get("subject") or task.content)
+        return self._plan()
+
+    def _bind(self, tool_use_id: str, output: str) -> None:
+        """Learn the id a created task answers to, from its own result."""
+        found = _TASK_ID.search(output) if tool_use_id in self._tasks else None
+        if found:
+            self._keys[found.group(1)] = tool_use_id
+
+    def _plan(self) -> Plan:
+        return Plan(
+            steps=[
+                PlanStep(content=task.content, status=task.status)
+                for task in self._tasks.values()
+            ]
         )
-        for todo in todos
-        if isinstance(todo, dict) and todo.get("content")
-    ]
-    if steps:
-        yield Plan(steps=steps)
 
 
 def _tool_result(block: ToolResultBlock) -> ToolResult:
@@ -198,8 +274,12 @@ class ClaudeBackend:
             )
 
         options = self._options(request, can_use_tool)
+        plan = PlanTracker()
         async with ClaudeSDKClient(options=options) as client:
             await client.query(append_to_prompt(request.prompt, request.attachments))
             async for message in client.receive_response():
                 for event in events_from_message(message):
                     await session.emit(event)
+                    update = plan.absorb(event)
+                    if update is not None:
+                        await session.emit(update)

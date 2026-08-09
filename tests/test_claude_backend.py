@@ -1,4 +1,4 @@
-"""Unit tests for the claude backend's pure mapping, with no live Claude."""
+"""Unit tests for the claude backend's mapping and plan tracking, no live Claude."""
 
 from __future__ import annotations
 
@@ -22,7 +22,11 @@ from a2acode.backends.base import (
     ToolResult,
     ToolUse,
 )
-from a2acode.backends.claude import ClaudeBackend, events_from_message
+from a2acode.backends.claude import (
+    ClaudeBackend,
+    PlanTracker,
+    events_from_message,
+)
 
 
 def test_events_from_assistant_message_with_write():
@@ -101,38 +105,99 @@ def test_errored_tool_result_is_flagged_and_block_content_is_joined():
     assert result.output == "boom"
 
 
-def test_todowrite_yields_a_plan_alongside_the_tool_use():
-    message = AssistantMessage(
-        content=[
-            ToolUseBlock(
-                id="t1",
-                name="TodoWrite",
-                input={
-                    "todos": [
-                        {"content": "read the code", "status": "completed"},
-                        {"content": "write the fix", "status": "in_progress"},
-                    ]
-                },
-            )
-        ],
-        model="claude-test",
+def _created(tool_use_id: str, task_id: str) -> ToolResult:
+    """The result a TaskCreate call gets back, which is where its id is."""
+    return ToolResult(
+        tool_use_id=tool_use_id,
+        output=f"Task #{task_id} created successfully: something",
     )
-    events = list(events_from_message(message))
 
-    assert [type(e) for e in events] == [ToolUse, Plan]
-    assert [(s.content, s.status) for s in events[1].steps] == [
+
+def _steps(plan: Plan) -> list[tuple[str, str]]:
+    return [(step.content, step.status) for step in plan.steps]
+
+
+def test_the_task_tools_build_a_plan_one_entry_at_a_time():
+    tracker = PlanTracker()
+
+    first = tracker.absorb(ToolUse("TaskCreate", {"subject": "read the code"}, "t1"))
+    assert _steps(first) == [("read the code", "pending")]
+    # The result only teaches the tracker the id; it is not a plan change.
+    assert tracker.absorb(_created("t1", "1")) is None
+
+    second = tracker.absorb(ToolUse("TaskCreate", {"subject": "write the fix"}, "t2"))
+    assert tracker.absorb(_created("t2", "2")) is None
+    assert len(second.steps) == 2
+
+    started = tracker.absorb(
+        ToolUse("TaskUpdate", {"taskId": "1", "status": "completed"}, "t3")
+    )
+    assert _steps(started) == [
+        ("read the code", "completed"),
+        ("write the fix", "pending"),
+    ]
+
+
+def test_a_deleted_task_leaves_the_plan():
+    tracker = PlanTracker()
+    tracker.absorb(ToolUse("TaskCreate", {"subject": "drop me"}, "t1"))
+    tracker.absorb(_created("t1", "1"))
+
+    plan = tracker.absorb(
+        ToolUse("TaskUpdate", {"taskId": "1", "status": "deleted"}, "t2")
+    )
+    assert plan is not None
+    assert plan.steps == []
+
+
+def test_an_update_to_a_task_the_tracker_never_saw_is_ignored():
+    tracker = PlanTracker()
+    assert (
+        tracker.absorb(
+            ToolUse("TaskUpdate", {"taskId": "9", "status": "completed"}, "t1")
+        )
+        is None
+    )
+
+
+def test_todowrite_still_carries_a_whole_plan():
+    # Older CLIs write the list in one call, so one call is a whole plan.
+    plan = PlanTracker().absorb(
+        ToolUse(
+            "TodoWrite",
+            {
+                "todos": [
+                    {"content": "read the code", "status": "completed"},
+                    {"content": "write the fix", "status": "in_progress"},
+                ]
+            },
+            "t1",
+        )
+    )
+    assert _steps(plan) == [
         ("read the code", "completed"),
         ("write the fix", "in_progress"),
     ]
 
 
-def test_malformed_todos_do_not_raise():
+def test_a_malformed_task_list_does_not_raise():
+    tracker = PlanTracker()
     for todos in ("oops", [1, "x"], []):
-        message = AssistantMessage(
-            content=[ToolUseBlock(id="t1", name="TodoWrite", input={"todos": todos})],
-            model="claude-test",
-        )
-        assert [type(e) for e in events_from_message(message)] == [ToolUse]
+        assert tracker.absorb(ToolUse("TodoWrite", {"todos": todos}, "t1")) is None
+    assert (
+        tracker.absorb(ToolUse("TaskCreate", {"description": "no subject"}, "t2"))
+        is None
+    )
+
+
+def test_a_plan_tool_call_is_only_a_tool_use_to_the_mapper():
+    # The plan needs state across calls, so it is the tracker's, not the pure
+    # mapper's, which is why keying off one tool name went stale unnoticed.
+    message = AssistantMessage(
+        content=[ToolUseBlock(id="t1", name="TaskCreate", input={"subject": "x"})],
+        model="claude-test",
+    )
+    assert [type(e) for e in events_from_message(message)] == [ToolUse]
 
 
 def test_thinking_block_maps_to_a_thought():
