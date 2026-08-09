@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import suppress
 from dataclasses import dataclass, field
 from uuid import uuid4
 
@@ -409,11 +410,18 @@ class ClaudeCodeExecutor(AgentExecutor):
                     if event.session_id:
                         self._remember_session(context_id, event.session_id)
         except asyncio.CancelledError:
-            # Client disconnected / timed out: drop the session and its runner
-            # instead of leaking them. Synchronous cleanup since we are cancelled.
+            # A deliberate tasks/cancel, or server shutdown: drop the session and
+            # its runner instead of leaking them.
             self._live.pop(task_id, None)
             self._streams.pop(task_id, None)
             session.abort()
+            # The terminal state has to go out from here. We are cancelled before
+            # AgentExecutor.cancel is called, and unwinding closes the event
+            # queue, so the status it enqueues is dropped and the task stays
+            # `working`. Awaited rather than shielded: the enqueue does not
+            # suspend, so it lands ahead of that close.
+            with suppress(BaseException):
+                await updater.cancel()
             raise
         except Exception:  # noqa: BLE001 (surface failure without leaking details)
             logger.exception("backend run failed for task %s", task_id)
