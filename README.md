@@ -165,7 +165,7 @@ uv run a2acode call "sudo reboot"
 uv run a2acode call "allow" --task <id> --context <id>
 ```
 
-`allow` (or `yes`, `approve`, `ok`) approves; anything else denies. The agent session stays alive across the pause, so it resumes exactly where it stopped. Over ACP this is the agent's `session/request_permission` call answered from the A2A caller's reply; with the `claude` backend it routes through the Claude SDK's `can_use_tool`.
+`allow`, `yes`, `y`, `ok`, `approve`, `accept`, `grant`, or anything starting with `allow` approves; anything else denies. The agent session stays alive across the pause, so it resumes exactly where it stopped. Over ACP this is the agent's `session/request_permission` call answered from the A2A caller's reply; with the `claude` backend it routes through the Claude SDK's `can_use_tool`.
 
 A denial carries the words it was written with, so `no, run pytest -x instead` can redirect the turn rather than merely refuse it. How far the reason travels is the agent protocol's call: the `claude` backend hands it to the agent, and so does a denied ACP terminal, but ACP's answer to an ordinary tool permission carries only the option chosen and has nowhere to put text.
 
