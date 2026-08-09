@@ -209,10 +209,11 @@ def _describe_tool(event: ToolUse) -> str:
     i = event.tool_input
     if event.name == "Bash":
         return f"$ {str(i.get('command', '')).strip()[:120]}"
-    path = i.get("file_path") or i.get("path") or i.get("pattern")
+    path = str(i.get("file_path") or i.get("path") or i.get("pattern") or "")
     # ACP names a tool call with a human title that often already says the path
-    # ("Write calc.py"); appending it again reads as a stutter.
-    if path and str(path) not in event.name:
+    # ("Read app.py") while the argument spells it out in full, so compare the
+    # last segment too or the line repeats itself.
+    if path and path not in event.name and path.rsplit("/", 1)[-1] not in event.name:
         return f"{event.name} {path}"
     return event.name
 

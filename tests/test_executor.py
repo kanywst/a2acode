@@ -175,8 +175,15 @@ async def test_pump_does_not_repeat_a_path_the_tool_name_already_carries():
             name="Write calc.py", tool_input={"file_path": "calc.py"}, tool_use_id="t1"
         ),
         ToolUse(name="Write", tool_input={"file_path": "other.py"}, tool_use_id="t2"),
+        # The title carries the basename, the argument the whole path: still one
+        # mention of the file, not two.
+        ToolUse(
+            name="Read app.py",
+            tool_input={"file_path": "/w/proj/app.py"},
+            tool_use_id="t3",
+        ),
     )
-    assert updater.status_lines == ["Write calc.py", "Write other.py"]
+    assert updater.status_lines == ["Write calc.py", "Write other.py", "Read app.py"]
 
 
 async def test_pump_falls_back_when_a_result_has_no_matching_tool_use():
