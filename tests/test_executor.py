@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+
+import pytest
+
 from a2acode import executor as executor_mod
 from a2acode.backends import (
     BackendSession,
@@ -111,6 +115,7 @@ class _RecordingUpdater:
     def __init__(self) -> None:
         self.did_fail = False
         self.did_complete = False
+        self.did_cancel = False
         self.status_lines: list[str] = []
         self.artifacts: list[tuple[str | None, str]] = []
         self.artifact_ids: list[str | None] = []
@@ -130,6 +135,9 @@ class _RecordingUpdater:
 
     async def complete(self, message=None):
         self.did_complete = True
+
+    async def cancel(self, message=None):
+        self.did_cancel = True
 
 
 async def _pump_events(*events) -> _RecordingUpdater:
@@ -250,6 +258,30 @@ async def test_pump_clears_a_plan_the_agent_abandoned():
     # The second update must replace the checklist, not leave the stale one up.
     assert [text for _, text in updater.artifacts] == ["- [ ] step one\n", ""]
     assert len({a for a in updater.artifact_ids if a}) == 1
+
+
+async def test_pump_cancels_the_task_when_its_run_is_cancelled():
+    async def _hang(_session):
+        await asyncio.sleep(60)
+
+    session = BackendSession()
+    session.start(_hang)
+    executor = ClaudeCodeExecutor(make_backend("echo"))
+    executor._live["task-x"] = session
+    updater = _RecordingUpdater()
+
+    pump = asyncio.create_task(executor._pump(updater, "task-x", "ctx-x", session))
+    await asyncio.sleep(0.05)
+    pump.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await pump
+
+    # AgentExecutor.cancel runs too late to write this: by then the event queue
+    # is closed and its status is dropped.
+    assert updater.did_cancel
+    assert "task-x" not in executor._live
+    assert "task-x" not in executor._streams
+    await session.close()
 
 
 async def test_pump_fails_an_evicted_session():
