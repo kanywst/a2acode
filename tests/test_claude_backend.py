@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from claude_agent_sdk import (
     AssistantMessage,
+    PermissionResultAllow,
     ResultMessage,
     TextBlock,
     ThinkingBlock,
@@ -15,6 +16,8 @@ from claude_agent_sdk import (
 from a2acode.backends import claude as claude_mod
 from a2acode.backends.base import (
     FileChange,
+    PermissionDecision,
+    PermissionRequest,
     Plan,
     Result,
     RunRequest,
@@ -26,8 +29,10 @@ from a2acode.backends.base import (
 from a2acode.backends.claude import (
     ClaudeBackend,
     PlanTracker,
+    allowed_input,
     events_from_message,
 )
+from a2acode.backends.session import BackendSession
 
 
 def test_events_from_assistant_message_with_write():
@@ -368,3 +373,116 @@ def test_options_applies_settings():
     assert options.max_budget_usd == 0.5
     # A server must not inherit the developer's personal allowlist.
     assert options.setting_sources == []
+
+
+_QUESTIONS = {
+    "questions": [
+        {
+            "question": "Which test runner?",
+            "header": "Runner",
+            "options": [{"label": "pytest"}, {"label": "unittest"}],
+            "multiSelect": False,
+        }
+    ]
+}
+
+
+def test_allowed_input_echoes_an_ordinary_tools_input():
+    decision = PermissionDecision(request_id="r1", allow=True)
+    given = {"command": "pytest -x"}
+
+    # An allow that omits the input is a malformed result to an older CLI, which
+    # denies the call instead of running it.
+    assert allowed_input("Bash", given, decision) == given
+    # Answers belong to the tool that asked; nothing else runs with an extra
+    # argument the agent never wrote.
+    answered = PermissionDecision("r1", True, answers={"Which test runner?": "pytest"})
+    assert allowed_input("Bash", given, answered) == given
+
+
+def test_allowed_input_folds_the_answers_into_the_question():
+    decision = PermissionDecision(
+        request_id="r1", allow=True, answers={"Which test runner?": "pytest"}
+    )
+
+    updated = allowed_input("AskUserQuestion", _QUESTIONS, decision)
+
+    assert updated["answers"] == {"Which test runner?": "pytest"}
+    # The tool pairs each answer with the question it answers.
+    assert updated["questions"] == _QUESTIONS["questions"]
+
+
+def test_allowed_input_leaves_an_unanswered_question_alone():
+    decision = PermissionDecision(request_id="r1", allow=True)
+    assert "answers" not in allowed_input("AskUserQuestion", _QUESTIONS, decision)
+
+
+class _FakeClient:
+    """Stands in for ClaudeSDKClient, driving the permission callback once."""
+
+    results: list = []
+
+    def __init__(self, options):
+        self._options = options
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def query(self, prompt):
+        return None
+
+    async def receive_response(self):
+        _FakeClient.results.append(
+            await self._options.can_use_tool("AskUserQuestion", _QUESTIONS, None)
+        )
+        return
+        yield
+
+
+async def test_an_answered_question_reaches_the_sdk(monkeypatch):
+    monkeypatch.setattr(claude_mod, "ClaudeSDKClient", _FakeClient)
+    _FakeClient.results.clear()
+    session = BackendSession()
+    backend = ClaudeBackend()
+    session.start(lambda s: backend.drive(s, RunRequest(prompt="hi")))
+
+    asked = [event async for event in session.drain()][-1]
+    assert isinstance(asked, PermissionRequest)
+    assert asked.tool_input == _QUESTIONS
+    session.resolve(
+        PermissionDecision(
+            request_id=asked.request_id,
+            allow=True,
+            answers={"Which test runner?": ["pytest", "unittest"]},
+        )
+    )
+    async for _ in session.drain():
+        pass
+
+    allowed = _FakeClient.results[-1]
+    assert isinstance(allowed, PermissionResultAllow)
+    assert allowed.updated_input["answers"] == {
+        "Which test runner?": ["pytest", "unittest"]
+    }
+
+
+async def test_a_denied_question_carries_the_callers_words(monkeypatch):
+    monkeypatch.setattr(claude_mod, "ClaudeSDKClient", _FakeClient)
+    _FakeClient.results.clear()
+    session = BackendSession()
+    backend = ClaudeBackend()
+    session.start(lambda s: backend.drive(s, RunRequest(prompt="hi")))
+
+    asked = [event async for event in session.drain()][-1]
+    session.resolve(
+        PermissionDecision(
+            request_id=asked.request_id, allow=False, message="stop asking"
+        )
+    )
+    async for _ in session.drain():
+        pass
+
+    assert _FakeClient.results[-1].message == "stop asking"

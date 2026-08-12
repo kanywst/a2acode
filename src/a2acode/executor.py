@@ -67,6 +67,11 @@ _OPTION_PREFIX = "option:"
 _MAX_CONTEXTS = 4096
 _MAX_LIVE = 256
 
+# What one reply can answer, and how many choices one answer names, so a caller
+# cannot hand the agent an unbounded object through the gate.
+_MAX_ANSWERS = 8
+_MAX_CHOICES = 8
+
 # Checklist markers for a plan step's status; anything else renders as open.
 _PLAN_MARKS = {"completed": "x", "in_progress": ">"}
 
@@ -121,13 +126,41 @@ def _message_id(context: RequestContext) -> str:
     return str(getattr(getattr(context, "message", None), "message_id", "") or "")
 
 
-def _echoed_request_id(message: object) -> str:
-    """The request id a caller sent back, when it sent one."""
+def _permission_block(message: object) -> dict[str, object]:
+    """The permission metadata a caller sent with its answer, if any."""
     metadata = getattr(message, "metadata", None)
     if metadata is None:
-        return ""
+        return {}
     block = json_format.MessageToDict(metadata).get("a2acode_permission")
-    return str(block.get("request_id", "")) if isinstance(block, dict) else ""
+    return block if isinstance(block, dict) else {}
+
+
+def _echoed_request_id(message: object) -> str:
+    """The request id a caller sent back, when it sent one."""
+    return str(_permission_block(message).get("request_id", ""))
+
+
+def _answers(message: object) -> dict[str, str | list[str]]:
+    """What the caller answered, for a gate that asked rather than acted.
+
+    Read from metadata rather than from the reply's text: the answer to "which
+    database?" is prose, and prose is how a caller refuses.
+    """
+    raw = _permission_block(message).get("answers")
+    if not isinstance(raw, dict):
+        return {}
+    answers: dict[str, str | list[str]] = {}
+    for question, answer in list(raw.items())[:_MAX_ANSWERS]:
+        if not question:
+            continue
+        if isinstance(answer, str):
+            if answer:
+                answers[question] = answer
+        elif isinstance(answer, list):
+            chosen = [c for c in answer[:_MAX_CHOICES] if isinstance(c, str) and c]
+            if chosen:
+                answers[question] = chosen
+    return answers
 
 
 def _is_textual(media_type: str) -> bool:
@@ -229,8 +262,8 @@ class _Budget:
                 self.binary -= len(attachment.data)
 
 
-def _one_line(value: str) -> str:
-    """Fold agent-supplied text onto one printable line.
+def one_line(value: str) -> str:
+    """Fold agent-supplied text onto one printable line. Shared with the CLI.
 
     The pause is what the caller reads to decide, and a terminal acts on control
     characters rather than showing them: a newline in a tool's title could forge
@@ -245,7 +278,7 @@ def _one_line(value: str) -> str:
 
 def _shown(value: str) -> str:
     """Render an agent-supplied label as one quoted token."""
-    return repr(_one_line(value)[:80])
+    return repr(one_line(value)[:80])
 
 
 def _describe_tool(event: ToolUse) -> str:
@@ -570,8 +603,8 @@ class ClaudeCodeExecutor(AgentExecutor):
         line = event.description or event.tool_name
         # Not truncated, unlike an option's label: for a terminal this line is
         # the command being approved, and the caller has to see all of it.
-        text = f"Permission requested for {_one_line(event.tool_name)}: "
-        text += _one_line(line)
+        text = f"Permission requested for {one_line(event.tool_name)}: "
+        text += one_line(line)
         permission: dict[str, object] = {
             "request_id": event.request_id,
             "tool": event.tool_name,
@@ -613,6 +646,17 @@ class ClaudeCodeExecutor(AgentExecutor):
 
     @staticmethod
     def _decision(
+        context: RequestContext, session: BackendSession
+    ) -> PermissionDecision:
+        decision = ClaudeCodeExecutor._verdict(context, session)
+        if decision.allow:
+            # Only an approval carries them: a refusal settles the call, and the
+            # words it was written with already travel as the reason.
+            decision.answers = _answers(getattr(context, "message", None))
+        return decision
+
+    @staticmethod
+    def _verdict(
         context: RequestContext, session: BackendSession
     ) -> PermissionDecision:
         raw = (context.get_user_input() or "").strip()

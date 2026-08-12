@@ -11,7 +11,8 @@ it across the run.
 
 Permission prompts are routed through ``can_use_tool`` into the session's
 ``request_permission``, so the caller approves or denies a tool over A2A instead
-of the server skipping it.
+of the server skipping it. Claude's own clarifying questions arrive at that same
+callback, so an approval carries the caller's answers back as the tool's input.
 
 Authentication follows whatever the Claude CLI is configured with. For a server
 that answers on behalf of other agents that means an Anthropic API key (or
@@ -46,6 +47,7 @@ from claude_agent_sdk import (
 from .attach import append_to_prompt
 from .base import (
     BackendEvent,
+    PermissionDecision,
     Plan,
     PlanStep,
     Result,
@@ -76,6 +78,10 @@ _PLAN_TOOLS = (_TODO_TOOL, _TASK_CREATE, _TASK_UPDATE)
 _MAX_PLANS = 256
 _MAX_STEPS = 256
 _MAX_PENDING = 64
+
+# The one tool whose gate is a question rather than a request to act: nothing
+# runs when it is approved, the answer is the outcome.
+_ASK_TOOL = "AskUserQuestion"
 
 # "Task #1 created successfully: ..." - a created task's id is reported by its
 # result, not by the call, and TaskUpdate addresses it by that id. The creation
@@ -116,6 +122,19 @@ def events_from_message(message: object) -> Iterator[BackendEvent]:
             num_turns=message.num_turns,
             usage=message.usage,
         )
+
+
+def allowed_input(
+    tool_name: str, tool_input: dict[str, Any], decision: PermissionDecision
+) -> dict[str, Any]:
+    """The input an approved tool runs with.
+
+    Echoed back rather than left out, which an older CLI rejects as a malformed
+    allow, and carrying the caller's answers for the tool that asked for them.
+    """
+    if tool_name != _ASK_TOOL or not decision.answers:
+        return tool_input
+    return {**tool_input, "answers": dict(decision.answers)}
 
 
 def _bound(store: dict[str, Any], cap: int) -> None:
@@ -322,12 +341,13 @@ class ClaudeBackend:
 
     async def drive(self, session: BackendSession, request: RunRequest) -> None:
         async def can_use_tool(tool_name, tool_input, context):
+            given = dict(tool_input or {})
             description = getattr(context, "display_name", "") or tool_name
-            decision = await session.request_permission(
-                tool_name, dict(tool_input or {}), description
-            )
+            decision = await session.request_permission(tool_name, given, description)
             if decision.allow:
-                return PermissionResultAllow()
+                return PermissionResultAllow(
+                    updated_input=allowed_input(tool_name, given, decision)
+                )
             return PermissionResultDeny(
                 message=decision.message or "Denied by A2A caller"
             )

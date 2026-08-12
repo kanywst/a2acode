@@ -73,3 +73,49 @@ def test_serve_rejects_malformed_agent_command(mock_run: MagicMock) -> None:
     assert result.exit_code != 0
     mock_run.assert_not_called()
     assert "agent-command" in _plain(result.output)
+
+
+def test_answer_pairs_fold_into_one_object() -> None:
+    from a2acode.cli import _answers
+
+    answers = _answers(["Runner=pytest", "Files=a.py", "Files=b.py"])
+
+    # Repeating one question is how a multi-select answer names both choices.
+    assert answers == {"Runner": "pytest", "Files": ["a.py", "b.py"]}
+
+
+def test_answer_without_a_choice_is_rejected() -> None:
+    result = runner.invoke(app, ["call", "allow", "--answer", "Runner"])
+
+    assert result.exit_code != 0
+    assert "questionchoice" in _plain(result.output)
+
+
+def test_input_required_lists_the_questions_and_how_to_answer(capsys) -> None:
+    from a2acode.cli import _render_input_required
+
+    _render_input_required(
+        "Permission requested for AskUserQuestion: asking",
+        {"task": "t1", "context": "c1", "request": "r1"},
+        "http://localhost:9100/",
+        {
+            "request_id": "r1",
+            "tool": "AskUserQuestion",
+            "input": {
+                "questions": [
+                    {
+                        "question": "Which runner?\x1b[2K",
+                        "header": "Runner",
+                        "options": [{"label": "pytest", "description": "fast"}],
+                    }
+                ]
+            },
+        },
+    )
+
+    out = capsys.readouterr().out
+    # A caller answers by question text, so it has to be shown one; the escape
+    # is rendered, not acted on, the same as anywhere else in the pause.
+    assert "\x1b" not in out
+    assert "pytest — fast" in out
+    assert "--answer 'Which runner?\\x1b[2K=<choice>'" in out

@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import shlex
+from typing import Annotated
 from uuid import uuid4
 
 import httpx
@@ -231,9 +232,17 @@ def call(
         help="requestId from the prompt being answered, so a resend cannot "
         "settle a later one.",
     ),
+    answer: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--answer",
+            help="Answer to a question the agent asked, as 'question=choice'. "
+            "Repeat for each question, and again on one question to pick several.",
+        ),
+    ] = None,
 ) -> None:
     """Send a message and print the streamed task events."""
-    asyncio.run(_call(text, url, context, task, request))
+    asyncio.run(_call(text, url, context, task, request, _answers(answer or [])))
 
 
 @app.command()
@@ -259,12 +268,31 @@ def _state_name(state) -> str:
     return TaskState.Name(state).removeprefix("TASK_STATE_").lower()
 
 
+def _answers(pairs: list[str]) -> dict[str, str | list[str]]:
+    """Fold 'question=choice' options into the object the server reads."""
+    answers: dict[str, str | list[str]] = {}
+    for pair in pairs:
+        question, sep, choice = pair.partition("=")
+        question, choice = question.strip(), choice.strip()
+        if not sep or not question or not choice:
+            raise typer.BadParameter(f"--answer must be 'question=choice': {pair!r}")
+        previous = answers.get(question)
+        if previous is None:
+            answers[question] = choice
+        elif isinstance(previous, list):
+            previous.append(choice)
+        else:
+            answers[question] = [previous, choice]
+    return answers
+
+
 async def _call(
     text: str,
     url: str,
     context: str | None,
     task: str | None,
     request_id: str | None = None,
+    answers: dict[str, str | list[str]] | None = None,
 ) -> None:
     from a2a.client import create_client
     from a2a.client.client import ClientConfig
@@ -279,10 +307,15 @@ async def _call(
         message.context_id = context
     if task:
         message.task_id = task
+    block: dict[str, object] = {}
     if request_id:
         # Names the prompt this answers, so the server can turn it down rather
         # than apply it to whatever it is waiting on now.
-        message.metadata.update({"a2acode_permission": {"request_id": request_id}})
+        block["request_id"] = request_id
+    if answers:
+        block["answers"] = answers
+    if block:
+        message.metadata.update({"a2acode_permission": block})
 
     ids = {"task": task or "", "context": context or "", "request": ""}
     streaming = False
@@ -310,8 +343,9 @@ async def _call(
                     if state == "working" and line:
                         typer.echo(f"  · {line}")
                     elif state == "input_required":
-                        ids["request"] = _asked_request_id(s.message)
-                        _render_input_required(line, ids, url)
+                        asked = _permission_block(s.message)
+                        ids["request"] = str(asked.get("request_id", ""))
+                        _render_input_required(line, ids, url, asked)
                     elif state != "working":
                         meta = _format_meta(s.message) if s.message else ""
                         typer.echo(f"[{state}] {meta}".rstrip())
@@ -337,20 +371,59 @@ async def _call(
                 await closer
 
 
-def _asked_request_id(msg) -> str:
-    """The requestId the pause published, for the reply to name back."""
+def _permission_block(msg) -> dict:
+    """What the pause published about the request, for the reply to answer."""
     from google.protobuf.json_format import MessageToDict
 
     block = (MessageToDict(msg).get("metadata") or {}).get("a2acode_permission")
-    return str(block.get("request_id", "")) if isinstance(block, dict) else ""
+    return block if isinstance(block, dict) else {}
 
 
-def _render_input_required(line: str, ids: dict[str, str], url: str) -> None:
+def _questions(block: dict) -> list[dict]:
+    """The questions a gate asked, when asking is all it does."""
+    asked = block.get("input")
+    questions = asked.get("questions") if isinstance(asked, dict) else None
+    if not isinstance(questions, list):
+        return []
+    return [q for q in questions if isinstance(q, dict)]
+
+
+def _render_questions(questions: list[dict]) -> str:
+    """List each question and its choices, and return the --answer flags for them.
+
+    Folded through the same sanitizer as the rest of the pause, so a question
+    carrying control characters is shown rather than obeyed — and the template it
+    prints answers that folded text, which such a question will not match.
+    """
+    from .executor import one_line
+
+    flags = ""
+    for question in questions:
+        text = one_line(str(question.get("question", "")))
+        header = one_line(str(question.get("header", "")))
+        typer.echo(f"  {text}" + (f"  [{header}]" if header else ""))
+        options = question.get("options")
+        for option in options if isinstance(options, list) else []:
+            if isinstance(option, dict):
+                label = one_line(str(option.get("label", "")))
+                about = one_line(str(option.get("description", "")))
+                typer.echo(f"      {label} — {about}" if about else f"      {label}")
+        if question.get("multiSelect"):
+            typer.echo("      (repeat --answer to pick several)")
+        flags += " --answer " + shlex.quote(f"{text}=<choice>")
+    return flags
+
+
+def _render_input_required(
+    line: str, ids: dict[str, str], url: str, block: dict
+) -> None:
     typer.echo(f"[input-required] {line}")
+    questions = _questions(block)
+    flags = _render_questions(questions) if questions else ""
     named = f" --request {ids['request']}" if ids.get("request") else ""
     follow = (
         f'a2acode call "allow" --task {ids["task"]} '
-        f"--context {ids['context']}{named} --url {url}"
+        f"--context {ids['context']}{named} --url {url}{flags}"
     )
     typer.echo(f"  reply: {follow}")
     typer.echo('  (or "deny" to refuse)')
