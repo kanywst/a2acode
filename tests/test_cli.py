@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from a2acode.cli import app
@@ -91,7 +92,9 @@ def test_answer_without_a_choice_is_rejected() -> None:
     assert "questionchoice" in _plain(result.output)
 
 
-def test_input_required_lists_the_questions_and_how_to_answer(capsys) -> None:
+def test_input_required_lists_the_questions_and_how_to_answer(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     from a2acode.cli import _render_input_required
 
     _render_input_required(

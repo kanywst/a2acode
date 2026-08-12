@@ -371,7 +371,7 @@ async def _call(
                 await closer
 
 
-def _permission_block(msg) -> dict:
+def _permission_block(msg) -> dict[str, object]:
     """What the pause published about the request, for the reply to answer."""
     from google.protobuf.json_format import MessageToDict
 
@@ -379,7 +379,7 @@ def _permission_block(msg) -> dict:
     return block if isinstance(block, dict) else {}
 
 
-def _questions(block: dict) -> list[dict]:
+def _questions(block: dict[str, object]) -> list[dict[str, object]]:
     """The questions a gate asked, when asking is all it does."""
     asked = block.get("input")
     questions = asked.get("questions") if isinstance(asked, dict) else None
@@ -388,7 +388,7 @@ def _questions(block: dict) -> list[dict]:
     return [q for q in questions if isinstance(q, dict)]
 
 
-def _render_questions(questions: list[dict]) -> str:
+def _render_questions(questions: list[dict[str, object]]) -> str:
     """List each question and its choices, and return the --answer flags for them.
 
     Folded through the same sanitizer as the rest of the pause, so a question
@@ -415,7 +415,7 @@ def _render_questions(questions: list[dict]) -> str:
 
 
 def _render_input_required(
-    line: str, ids: dict[str, str], url: str, block: dict
+    line: str, ids: dict[str, str], url: str, block: dict[str, object]
 ) -> None:
     typer.echo(f"[input-required] {line}")
     questions = _questions(block)
