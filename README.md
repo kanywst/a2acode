@@ -177,8 +177,8 @@ Not every gate is a request to act. When Claude has a clarifying question it cal
 uv run a2acode call "port the tests" --url http://localhost:9100/
 # ... [input-required] Permission requested for AskUserQuestion: ...
 #       Which test runner?  [Runner]
-#           pytest — what the repo uses
-#           unittest — stdlib only
+#           pytest: what the repo uses
+#           unittest: stdlib only
 uv run a2acode call "allow" --task <id> --context <id> --request <id> \
   --answer "Which test runner?=pytest"
 ```

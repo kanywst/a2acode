@@ -117,5 +117,5 @@ def test_input_required_lists_the_questions_and_how_to_answer(capsys) -> None:
     # A caller answers by question text, so it has to be shown one; the escape
     # is rendered, not acted on, the same as anywhere else in the pause.
     assert "\x1b" not in out
-    assert "pytest — fast" in out
+    assert "pytest: fast" in out
     assert "--answer 'Which runner?\\x1b[2K=<choice>'" in out

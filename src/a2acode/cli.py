@@ -407,7 +407,7 @@ def _render_questions(questions: list[dict]) -> str:
             if isinstance(option, dict):
                 label = one_line(str(option.get("label", "")))
                 about = one_line(str(option.get("description", "")))
-                typer.echo(f"      {label} — {about}" if about else f"      {label}")
+                typer.echo(f"      {label}: {about}" if about else f"      {label}")
         if question.get("multiSelect"):
             typer.echo("      (repeat --answer to pick several)")
         flags += " --answer " + shlex.quote(f"{text}=<choice>")
