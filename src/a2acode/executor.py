@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
+from itertools import islice
 from uuid import uuid4
 
 from a2a.server.agent_execution import AgentExecutor, RequestContext
@@ -150,7 +151,7 @@ def _answers(message: object) -> dict[str, str | list[str]]:
     if not isinstance(raw, dict):
         return {}
     answers: dict[str, str | list[str]] = {}
-    for question, answer in list(raw.items())[:_MAX_ANSWERS]:
+    for question, answer in islice(raw.items(), _MAX_ANSWERS):
         if not question:
             continue
         if isinstance(answer, str):
