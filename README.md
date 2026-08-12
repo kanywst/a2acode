@@ -171,6 +171,20 @@ A denial carries the words it was written with, so `no, run pytest -x instead` c
 
 Some gates are not yes/no. Claude Code's end-of-plan gate offers three choices — accept the edits that follow, allow this once and keep gating, or keep planning — so the pause lists whatever the agent offered, each with the `kind` that says what picking it would mean, and the caller answers `option:<id>` with the one it wants. The id is what binds; the kind is the agent's label for it. Anything else still resolves to allow or deny as above; naming an option takes the prefix because the agent chooses both an option's id and its polarity, and a bare answer would let it label a permissive choice with the word a caller reaches for to refuse.
 
+Not every gate is a request to act. When Claude has a clarifying question it calls `AskUserQuestion`, which asks and does nothing else, so approving it says nothing on its own — the answer is the outcome. The pause carries the questions and their choices, and the reply's metadata carries what was picked, keyed by question:
+
+```bash
+uv run a2acode call "port the tests" --url http://localhost:9100/
+# ... [input-required] Permission requested for AskUserQuestion: ...
+#       Which test runner?  [Runner]
+#           pytest — what the repo uses
+#           unittest — stdlib only
+uv run a2acode call "allow" --task <id> --context <id> --request <id> \
+  --answer "Which test runner?=pytest"
+```
+
+`--answer` repeats, once per question, and again on one question to name several choices for a multi-select. An approval with no answers reaches the agent as nobody having replied, and a denial still travels as the words it was written with, which for a question is a fine way to answer it.
+
 An answer settles one prompt, not whichever is waiting. Each pause carries a `requestId`, and an answer naming it is only applied to that prompt; a run often stops again immediately, so a client retry or a double submit of the previous answer would otherwise decide a tool the caller was never shown. An answer that names nothing is still taken, except when it is the same message arriving twice. Either way the server restates what is actually pending instead of applying the answer.
 
 Whatever the agent decides needs approval becomes an `input-required` pause rather than being silently skipped or auto-approved; the caller, not the server, holds the decision. Read-only actions the agent already treats as safe still run without a prompt.

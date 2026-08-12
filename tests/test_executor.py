@@ -470,16 +470,26 @@ async def test_input_required_carries_the_options_the_agent_offered():
     assert "'acceptEdits' ['allow_always'] 'Accept edits'" in updater.input_line
 
 
-def _answering(message_id: str, request_id: str = "") -> _Context:
+def _answering(
+    message_id: str,
+    request_id: str = "",
+    answers: dict | None = None,
+    text: str = "allow",
+) -> _Context:
     """A follow-up message, optionally naming the prompt it answers."""
     from a2a.types import Message, Part, Role
 
     message = Message(
-        message_id=message_id, role=Role.ROLE_USER, parts=[Part(text="allow")]
+        message_id=message_id, role=Role.ROLE_USER, parts=[Part(text=text)]
     )
+    block: dict[str, object] = {}
     if request_id:
-        message.metadata.update({"a2acode_permission": {"request_id": request_id}})
-    context = _Context("allow")
+        block["request_id"] = request_id
+    if answers is not None:
+        block["answers"] = answers
+    if block:
+        message.metadata.update({"a2acode_permission": block})
+    context = _Context(text)
     context.message = message  # type: ignore[attr-defined]
     return context
 
@@ -593,3 +603,48 @@ async def test_pump_fails_an_evicted_session():
         assert not updater.did_complete
     finally:
         await session.close()
+
+
+def _answered(answers: dict, text: str = "allow"):
+    session = BackendSession()
+    session.last_request_id = "req-1"
+    return ClaudeCodeExecutor._decision(
+        _answering("m1", "req-1", answers, text),  # type: ignore[arg-type]
+        session,
+    )
+
+
+def test_an_approval_carries_the_answers_the_caller_sent():
+    decision = _answered({"Which runner?": "pytest", "Which files?": ["a.py", "b.py"]})
+
+    assert decision.allow
+    assert decision.answers == {
+        "Which runner?": "pytest",
+        "Which files?": ["a.py", "b.py"],
+    }
+
+
+def test_a_refusal_carries_no_answers():
+    # A denial settles the call, and the words it was written with already travel
+    # as the reason.
+    decision = _answered({"Which runner?": "pytest"}, text="no, ask me later")
+
+    assert not decision.allow
+    assert decision.answers == {}
+
+
+def test_answers_that_are_not_choices_are_dropped():
+    decision = _answered({"": "pytest", "Which runner?": "", "How many?": 3})
+
+    assert decision.answers == {}
+
+
+def test_answers_are_bounded(monkeypatch):
+    monkeypatch.setattr(executor_mod, "_MAX_ANSWERS", 2)
+    monkeypatch.setattr(executor_mod, "_MAX_CHOICES", 2)
+    decision = _answered({f"q{i}": ["a", "b", "c"] for i in range(4)})
+
+    # Metadata is a protobuf map, so which two survive is not ordered; that the
+    # gate cannot be handed an unbounded object is the point.
+    assert len(decision.answers) == 2
+    assert all(choices == ["a", "b"] for choices in decision.answers.values())

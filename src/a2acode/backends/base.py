@@ -135,13 +135,16 @@ class PermissionDecision:
     """The caller's answer to a PermissionRequest.
 
     ``option_id`` names one of the offered options directly; without it the
-    answer resolves to whichever option matches ``allow``.
+    answer resolves to whichever option matches ``allow``. ``answers`` carries
+    what the caller replied to questions the tool asked, keyed by question: for
+    a gate that only asks, an approval alone says nothing.
     """
 
     request_id: str
     allow: bool
     message: str = ""
     option_id: str = ""
+    answers: dict[str, str | list[str]] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
