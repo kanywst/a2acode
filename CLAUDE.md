@@ -46,7 +46,6 @@ CLI / A2A caller
         -> echo.py      dependency-free mirror, for tests and offline wiring checks
         -> attach.py    renders caller attachments into a prompt (shared, pure)
         -> terminal.py  processes run on the server for an ACP agent
-        -> dispatch.py  ordered handling of an agent's notifications
 ```
 
 The `acp` backend is the headline: ACP's `session/update` stream, diff content, and `session/request_permission` map almost one-to-one onto the event vocabulary below, so vendor-neutrality is a launch-command choice rather than a backend per agent. ACP itself targets human-driven editors; a2acode's value is exposing an ACP agent to *remote A2A callers* with the permission round-trip and cost preserved.
@@ -90,7 +89,7 @@ An agent subprocess is kept alive per A2A context, not per turn: spawning one co
 - The pool is bounded (`_MAX_AGENTS`) and evicts the least recently used **idle** agent. A busy one is never evicted, so the pool overshoots rather than killing a running task's agent.
 - Any exception during a turn marks the agent `broken`; the next `_acquire` replaces it instead of resuming on a connection of unknown state.
 - A tool call is folded across its own updates (`_ToolCalls`). ACP announces one before it has parsed the arguments and fills them in later, absent meaning unchanged, so the `ToolUse` waits until the call can say what it acts on and later updates are completed from what the call already said. One never announced by end of turn is flushed rather than dropped. A consequence worth knowing: `session/request_permission` carries the arguments itself, so for an agent that announces a call before parsing them the `input-required` pause now precedes the call's `ToolUse`.
-- Notifications are dispatched **in order and inline** (`dispatch.py`), and a turn waits on the queue before emitting its `Result`. The library's default dispatcher spawns a task per notification and marks the queue item done immediately, which lets a prompt's reply overtake the agent's last `session/update`s and lose the tail of the answer. Requests stay spawned — a permission request parks until the caller answers.
+- The library hands each notification to its own task, so **`_BridgeClient.session_update` holds a lock** for the whole translation: text chunks are only an answer in the order they were sent, and nothing else orders two updates against each other. Completion is the library's job since 0.12.1 — `prompt` waits for the session's in-flight updates before returning, so the turn no longer ends with the agent's last words still in flight.
 - Terminals (`terminal.py`) are gated on the **same caller approval as any tool**. That gate is why advertising the capability is safe: `terminal/create` is a direct client call, and nothing in the protocol obliges an agent to ask permission first. The approval is the boundary — the process is *not* sandboxed, it runs as the server's user and the workspace only sets its cwd. It inherits a named allowlist of environment variables rather than the server's whole environment, so the provider credentials the adapter is launched with are not handed to an agent-chosen command. Do not weaken either the gate or that allowlist without saying so in the README's Permissions section, which states both as guarantees.
 
 ### Testing the ACP path

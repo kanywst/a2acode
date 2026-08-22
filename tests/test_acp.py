@@ -20,7 +20,6 @@ from acp import (
     update_plan,
 )
 from acp import schema as s
-from acp.task import InMemoryMessageQueue
 
 from a2acode.backends import acp as acp_mod
 from a2acode.backends.acp import (
@@ -299,6 +298,43 @@ async def _feed(*updates, flush: bool = True) -> list:
     if flush:
         await client.flush_tool_calls()
     return session.events
+
+
+@pytest.mark.asyncio
+async def test_concurrent_updates_are_emitted_in_arrival_order():
+    # The library hands each notification to its own task, so a first update
+    # that suspends mid-emit would otherwise let the next one overtake it - and
+    # text chunks are only an answer in the order they were sent.
+    class _Slow(_Emitting):
+        """Suspends the first emit only, so a second update can overtake it."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.gate = asyncio.Event()
+            self.calls = 0
+
+        async def emit(self, event) -> None:
+            self.calls += 1
+            if self.calls == 1:
+                await self.gate.wait()
+            self.events.append(event)
+
+    session = _Slow()
+    client = _BridgeClient(session)  # type: ignore[arg-type]
+
+    def chunk(text: str):
+        return s.AgentMessageChunk(
+            session_update="agent_message_chunk", content=text_block(text)
+        )
+
+    first = asyncio.ensure_future(client.session_update("sess", chunk("a")))
+    await asyncio.sleep(0)
+    second = asyncio.ensure_future(client.session_update("sess", chunk("b")))
+    await asyncio.sleep(0)
+    session.gate.set()
+    await asyncio.gather(first, second)
+
+    assert [e.text for e in session.events] == ["a", "b"]
 
 
 @pytest.mark.asyncio
@@ -678,7 +714,6 @@ def _agent(conn=None, *, load_session=False, session_id=None) -> _Agent:
         conn=conn or _FakeConn(),
         process=_FakeProcess(),
         client=_BridgeClient(),
-        queue=InMemoryMessageQueue(),
         capabilities=s.AgentCapabilities(load_session=load_session),
         session_id=session_id,
     )

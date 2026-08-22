@@ -59,7 +59,6 @@ from acp import (
 )
 from acp import schema as s
 from acp.exceptions import RequestError
-from acp.task import InMemoryMessageQueue
 
 from .attach import append_to_prompt
 from .base import (
@@ -79,7 +78,6 @@ from .base import (
     ToolUse,
 )
 from .diff import unified_diff
-from .dispatch import OrderedDispatcher
 from .session import BackendSession
 from .terminal import DEFAULT_OUTPUT_LIMIT, MAX_OUTPUT_LIMIT, Terminal, spawn
 
@@ -99,9 +97,6 @@ _MAX_TERMINALS = 16
 
 # Tool calls one turn is remembered across, for folding their later updates in.
 _MAX_TOOL_CALLS = 4096
-
-# How long a finished turn waits for its trailing notifications to be handled.
-_DRAIN_TIMEOUT = 10.0
 
 # A shell-safe environment variable name, which an agent's need not be.
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -437,6 +432,12 @@ class _BridgeClient(Client):
 
     def __init__(self, session: BackendSession | None = None, cwd: str = ".") -> None:
         self._session = session
+        # The library hands each notification to its own task, so nothing but
+        # this orders two updates against each other - and text chunks are only
+        # an answer in the order they were sent. asyncio.Lock hands the lock to
+        # its waiters in arrival order, and notifications arrive in the order
+        # the connection read them.
+        self._updates = asyncio.Lock()
         # Resolved workspace root: every fs read/write is confined under it so a
         # buggy or hostile agent can't reach arbitrary files via the capability
         # we advertise. ACP paths are absolute, but we still contain them.
@@ -492,21 +493,23 @@ class _BridgeClient(Client):
         return target
 
     async def session_update(self, session_id: str, update: Any, **_: Any) -> None:
-        if self._session is None:
-            return
-        if isinstance(update, s.UsageUpdate) and update.cost is not None:
-            self.cost_usd = update.cost.amount
-        for folded in self._tool_calls.feed(update):
-            for event in events_from_update(folded):
-                await self._session.emit(event)
+        async with self._updates:
+            if self._session is None:
+                return
+            if isinstance(update, s.UsageUpdate) and update.cost is not None:
+                self.cost_usd = update.cost.amount
+            for folded in self._tool_calls.feed(update):
+                for event in events_from_update(folded):
+                    await self._session.emit(event)
 
     async def flush_tool_calls(self) -> None:
         """Emit whatever a tool call did say, for one that never went further."""
-        if self._session is None:
-            return
-        for update in self._tool_calls.flush():
-            for event in events_from_update(update):
-                await self._session.emit(event)
+        async with self._updates:
+            if self._session is None:
+                return
+            for update in self._tool_calls.flush():
+                for event in events_from_update(update):
+                    await self._session.emit(event)
 
     async def request_permission(
         self,
@@ -673,7 +676,6 @@ class _Agent:
     conn: Any
     process: Any
     client: _BridgeClient
-    queue: Any
     capabilities: s.AgentCapabilities | None
     session_id: str | None = None
     pooled: bool = True
@@ -790,12 +792,9 @@ class ACPBackend:
             prompt=prompt_blocks(request, agent.capabilities),
             session_id=session_id,
         )
-        # A prompt's reply is handled inline by the receive loop while the
-        # session/update notifications it interleaved go through the dispatch
-        # queue. Without waiting, the turn ends while the agent's last words are
-        # still in flight and they are lost behind the end-of-stream sentinel.
-        with suppress(TimeoutError):
-            await asyncio.wait_for(agent.queue.join(), _DRAIN_TIMEOUT)
+        # ``prompt`` returns only once the session/update notifications it
+        # interleaved have been handled, so the agent's last words are events by
+        # now rather than still in flight behind the end-of-stream sentinel.
         await agent.client.flush_tool_calls()
         await session.emit(
             Result(
@@ -856,9 +855,6 @@ class ACPBackend:
         # scoped ignore.
         client = _BridgeClient(cwd=self.cwd)  # type: ignore[abstract]
         stack = AsyncExitStack()
-        # Our own queue and dispatcher, so a turn can wait for the agent's
-        # updates to have actually become events. See dispatch.py and _run_turn.
-        queue = InMemoryMessageQueue()
         try:
             conn, process = await stack.enter_async_context(
                 spawn_agent_process(
@@ -867,8 +863,6 @@ class ACPBackend:
                     *self.args,
                     env=self.env,
                     cwd=self.cwd,
-                    queue=queue,
-                    dispatcher_factory=OrderedDispatcher,
                 )
             )
             init = await conn.initialize(
@@ -888,7 +882,6 @@ class ACPBackend:
             conn=conn,
             process=process,
             client=client,
-            queue=queue,
             capabilities=init.agent_capabilities,
         )
 
