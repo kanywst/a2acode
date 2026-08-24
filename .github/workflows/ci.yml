@@ -46,6 +46,46 @@ jobs:
       - name: Build
         run: uv build
 
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      # The Dockerfile installs the wheel rather than the source tree, so the
+      # context has to hold one before the build runs.
+      - name: Build the wheel
+        run: uv build --wheel
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # One architecture and no push: this checks the image is buildable and
+      # runnable, while the release builds the multi-arch one it ships.
+      - name: Build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: a2acode:ci
+
+      # The echo backend needs no credential, and the card path is exempt from
+      # caller auth, so one request proves the whole image serves.
+      - name: Serve and fetch the agent card
+        run: |
+          docker run -d --name a2acode -p 9100:9100 a2acode:ci \
+            serve --backend echo --host 0.0.0.0
+          for i in $(seq 30); do
+            curl -fsS http://localhost:9100/.well-known/agent-card.json -o card.json && break
+            sleep 1
+          done
+          docker logs a2acode
+          test -s card.json
+          python3 -c "import json; print(json.load(open('card.json'))['name'])"
+          test "$(docker exec a2acode id -u)" = 1000
+
   markdown:
     runs-on: ubuntu-latest
     steps:

@@ -104,6 +104,28 @@ uv run a2acode call "now add a test for it" --context <context-id>
 
 Continuity needs the agent to support ACP's `session/load`. When it does not, the turn still runs, but on a fresh session — and the task says so in a status update rather than answering as if it remembered.
 
+## Container
+
+Every release publishes a `linux/amd64` and `linux/arm64` image to GHCR, holding the same wheel as the PyPI release with all three extras installed — so which backend and which task store it runs is a flag, not a rebuild. It runs as a non-root user and works in your project by way of whatever you mount over `/workspace`:
+
+```bash
+docker run --rm -p 9100:9100 \
+  -v "$PWD:/workspace" \
+  -e ANTHROPIC_API_KEY \
+  ghcr.io/kanywst/a2acode:latest
+```
+
+The default command is `serve --host 0.0.0.0`; anything you pass replaces it, so keep `--host` when you add flags:
+
+```bash
+docker run --rm -p 9100:9100 -v "$PWD:/workspace" \
+  ghcr.io/kanywst/a2acode:latest serve --host 0.0.0.0 --agent gemini
+```
+
+`/.well-known/agent-card.json` is exempt from caller authentication, which makes it the liveness and readiness probe — there is no separate health endpoint to configure.
+
+Two things worth knowing before deploying it. The image carries Node but not any ACP agent adapter, which the `acp` backend fetches with `npx` on the first run: an environment with no npm registry access needs its adapter baked into a layer of your own. And the mounted workspace is written as uid 1000, so pass `--user` if your project's files belong to someone else.
+
 ## Commands
 
 | Command              | Description                                  |
@@ -230,7 +252,7 @@ CI runs these on Python 3.13 and 3.14, plus a Markdown lint, on every push and p
 
 ## Releasing
 
-Pushing a `v*` tag builds the package, creates a GitHub release with the artifacts, and publishes to PyPI via trusted publishing:
+Pushing a `v*` tag builds the package, creates a GitHub release with the artifacts, publishes to PyPI via trusted publishing, and pushes the container image to GHCR:
 
 ```bash
 git tag v0.1.0

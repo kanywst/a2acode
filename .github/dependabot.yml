@@ -15,3 +15,13 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+
+  # The image's base layers age on their own schedule, and a stale one ships
+  # whatever CVEs Debian has patched since.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      images:
+        patterns: ["*"]
