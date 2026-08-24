@@ -106,25 +106,30 @@ Continuity needs the agent to support ACP's `session/load`. When it does not, th
 
 ## Container
 
-Every release publishes a `linux/amd64` and `linux/arm64` image to GHCR, holding the same wheel as the PyPI release with all three extras installed — so which backend and which task store it runs is a flag, not a rebuild. It runs as a non-root user and works in your project by way of whatever you mount over `/workspace`:
+Every release publishes a `linux/amd64` and `linux/arm64` image to GHCR, holding the same wheel as the PyPI release with all three extras installed — so which backend and which task store it runs is a flag, not a rebuild. It runs as a non-root user and works in your project by way of whatever you mount over `/workspace`.
+
+A container has to listen on every interface to be reachable at all, so the default command binds `0.0.0.0` where the `uv run` quick start binds loopback. That makes *where you publish the port* the boundary: whoever reaches it can run a coding agent in your workspace. Publish it to your own loopback while you try it out —
 
 ```bash
-docker run --rm -p 9100:9100 \
+docker run --rm -p 127.0.0.1:9100:9100 \
   -v "$PWD:/workspace" \
   -e ANTHROPIC_API_KEY \
   ghcr.io/kanywst/a2acode:latest
 ```
 
-The default command is `serve --host 0.0.0.0`; anything you pass replaces it, so keep `--host` when you add flags:
+— and on any network wider than that, mount a token file and require it, which also makes the card advertise the scheme:
 
 ```bash
-docker run --rm -p 9100:9100 -v "$PWD:/workspace" \
-  ghcr.io/kanywst/a2acode:latest serve --host 0.0.0.0 --agent gemini
+docker run --rm -p 9100:9100 \
+  -v "$PWD:/workspace" -v "$PWD/token:/run/token:ro" \
+  -e ANTHROPIC_API_KEY \
+  ghcr.io/kanywst/a2acode:latest \
+  serve --host 0.0.0.0 --auth-token-file /run/token
 ```
 
-`/.well-known/agent-card.json` is exempt from caller authentication, which makes it the liveness and readiness probe — there is no separate health endpoint to configure.
+See [Caller authentication](#caller-authentication) for what that check covers. As the second example shows, anything you pass replaces the default command, so `--host` has to come with it.
 
-Unlike the `uv run` quick start, which binds loopback, this listens on every interface as soon as you publish the port. Anything that can reach it can run a coding agent in your workspace, so on a network wider than your own machine mount a token and pass [`--auth-token-file`](#caller-authentication).
+`/.well-known/agent-card.json` stays exempt from that check — discovery precedes the credential — which makes it the liveness and readiness probe. There is no separate health endpoint to configure.
 
 Two things worth knowing before deploying it. The image carries Node but not any ACP agent adapter, which the `acp` backend fetches with `npx` on the first run: an environment with no npm registry access needs its adapter baked into a layer of your own. And the mounted workspace is written as uid 1000, so pass `--user` if your project's files belong to someone else.
 
