@@ -3,9 +3,9 @@
 # The `acp` backend launches its agent adapter with `npx`, so the runtime needs
 # Node next to Python. Copied out of the official image rather than piped from a
 # setup script; both stages are the same Debian release, so the binary matches.
-FROM node:24-trixie-slim AS node
+FROM node:26-trixie-slim AS node
 
-FROM python:3.13-slim-trixie
+FROM python:3.14-slim-trixie
 
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
