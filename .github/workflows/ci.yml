@@ -86,6 +86,18 @@ jobs:
           python3 -c "import json; print(json.load(open('card.json'))['name'])"
           test "$(docker exec a2acode id -u)" = 1000
 
+      # The default backend launches its adapter with npx, and echo never does.
+      # Without this, Node arriving broken out of the multi-stage copy would
+      # pass CI and fail for the first real caller instead.
+      - name: Run the agent launcher the acp backend uses
+        run: |
+          docker exec a2acode node --version
+          docker exec a2acode npm --version
+          # Fetching a package rather than just reporting a version, because it
+          # is the download cache under HOME that uid 1000 has to be able to
+          # write. Any tiny package with a CLI would do.
+          docker exec a2acode npx --yes semver@7.6.3 1.2.3 --range ">=1.0.0"
+
   markdown:
     runs-on: ubuntu-latest
     steps:
