@@ -16,10 +16,10 @@ updates:
       actions:
         patterns: ["*"]
 
-  # The image's base layers age on their own schedule, and a stale one ships
-  # whatever CVEs Debian has patched since. Majors are held back: the Node tag
-  # names an LTS line, and the first bump offered moved it to a release that is
-  # not one yet. Moving either runtime is a decision, not a refresh.
+  # The bases are pinned by digest, so this is what notices Debian republishing
+  # one and opens the rebuild. Majors are held back: the Node tag names an LTS
+  # line, and the first bump offered moved it to a release that is not one yet.
+  # Moving either runtime is a decision, not a refresh.
   - package-ecosystem: "docker"
     directory: "/"
     schedule:

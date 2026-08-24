@@ -3,9 +3,14 @@
 # The `acp` backend launches its agent adapter with `npx`, so the runtime needs
 # Node next to Python. Copied out of the official image rather than piped from a
 # setup script; both stages are the same Debian release, so the binary matches.
-FROM node:24-trixie-slim AS node
+#
+# Both bases are pinned by digest as well as tag. The tag is republished
+# whenever Debian patches the layers underneath it, so a digest is the only
+# form of it Dependabot can see move — and the only one that builds the same
+# image twice.
+FROM node:24-trixie-slim@sha256:0711b541c1c33a8a530ac4f0d391baa9a15b3d804695b1b24a47daa5fb60e74d AS node
 
-FROM python:3.13-slim-trixie
+FROM python:3.13-slim-trixie@sha256:ffb752e139c0a19692a43af8d8523b274222dd68eebad5d583b45c2201c6e30a
 
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
