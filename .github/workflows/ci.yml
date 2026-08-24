@@ -62,14 +62,26 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v4
 
-      # One architecture and no push: this checks the image is buildable and
-      # runnable, while the release builds the multi-arch one it ships.
+      # `load` takes a single architecture, so the runnable image is built
+      # separately from the pair the release ships.
       - name: Build
         uses: docker/build-push-action@v7
         with:
           context: .
           load: true
           tags: a2acode:ci
+
+      # Neither pushed nor loaded, only built: the base digests have to resolve
+      # on both legs, which a one-architecture build would not notice until a
+      # tag was already half-released.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Build both architectures
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
 
       # The echo backend needs no credential, and the card path is exempt from
       # caller auth, so one request proves the whole image serves.
