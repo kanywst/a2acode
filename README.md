@@ -124,6 +124,8 @@ docker run --rm -p 9100:9100 -v "$PWD:/workspace" \
 
 `/.well-known/agent-card.json` is exempt from caller authentication, which makes it the liveness and readiness probe — there is no separate health endpoint to configure.
 
+Unlike the `uv run` quick start, which binds loopback, this listens on every interface as soon as you publish the port. Anything that can reach it can run a coding agent in your workspace, so on a network wider than your own machine mount a token and pass [`--auth-token-file`](#caller-authentication).
+
 Two things worth knowing before deploying it. The image carries Node but not any ACP agent adapter, which the `acp` backend fetches with `npx` on the first run: an environment with no npm registry access needs its adapter baked into a layer of your own. And the mounted workspace is written as uid 1000, so pass `--user` if your project's files belong to someone else.
 
 ## Commands
