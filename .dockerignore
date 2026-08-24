@@ -1,0 +1,4 @@
+# The build context is only the wheel in dist/ — everything else would just
+# invalidate the layer cache on an unrelated edit.
+*
+!dist/*.whl

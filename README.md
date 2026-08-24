@@ -104,6 +104,35 @@ uv run a2acode call "now add a test for it" --context <context-id>
 
 Continuity needs the agent to support ACP's `session/load`. When it does not, the turn still runs, but on a fresh session — and the task says so in a status update rather than answering as if it remembered.
 
+## Container
+
+Every release publishes a `linux/amd64` and `linux/arm64` image to GHCR, holding the same wheel as the PyPI release with all three extras installed — so which backend and which task store it runs is a flag, not a rebuild. It runs as a non-root user and works in your project by way of whatever you mount over `/workspace`.
+
+A container has to listen on every interface to be reachable at all, so the default command binds `0.0.0.0` where the `uv run` quick start binds loopback. That makes *where you publish the port* the boundary: whoever reaches it can run a coding agent in your workspace. Publish it to your own loopback while you try it out —
+
+```bash
+docker run --rm -p 127.0.0.1:9100:9100 \
+  -v "$PWD:/workspace" \
+  -e ANTHROPIC_API_KEY \
+  ghcr.io/kanywst/a2acode:latest
+```
+
+— and on any network wider than that, mount a token file and require it, which also makes the card advertise the scheme:
+
+```bash
+docker run --rm -p 9100:9100 \
+  -v "$PWD:/workspace" -v "$PWD/token:/run/token:ro" \
+  -e ANTHROPIC_API_KEY \
+  ghcr.io/kanywst/a2acode:latest \
+  serve --host 0.0.0.0 --auth-token-file /run/token
+```
+
+See [Caller authentication](#caller-authentication) for what that check covers. As the second example shows, anything you pass replaces the default command, so `--host` has to come with it.
+
+`/.well-known/agent-card.json` stays exempt from that check — discovery precedes the credential — which makes it the liveness and readiness probe. There is no separate health endpoint to configure.
+
+Two things worth knowing before deploying it. The image carries Node but not any ACP agent adapter, which the `acp` backend fetches with `npx` on the first run: an environment with no npm registry access needs its adapter baked into a layer of your own. And the mounted workspace is written as uid 1000, so pass `--user` if your project's files belong to someone else.
+
 ## Commands
 
 | Command              | Description                                  |
@@ -230,7 +259,7 @@ CI runs these on Python 3.13 and 3.14, plus a Markdown lint, on every push and p
 
 ## Releasing
 
-Pushing a `v*` tag builds the package, creates a GitHub release with the artifacts, and publishes to PyPI via trusted publishing:
+Pushing a `v*` tag builds the package, creates a GitHub release with the artifacts, publishes to PyPI via trusted publishing, and pushes the container image to GHCR:
 
 ```bash
 git tag v0.1.0
