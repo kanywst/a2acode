@@ -1,6 +1,6 @@
 [project]
 name = "a2acode"
-version = "0.6.4"
+version = "0.7.0"
 description = "Serve Claude Code and other ACP coding agents over the A2A protocol."
 readme = "README.md"
 requires-python = ">=3.13"
