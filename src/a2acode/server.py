@@ -20,7 +20,6 @@ if TYPE_CHECKING:  # only installed with the persistence extra
     from sqlalchemy.ext.asyncio import AsyncEngine
 
 import httpx
-from a2a.server.context import ServerCallContext
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.routes import (
     create_agent_card_routes,
@@ -101,7 +100,6 @@ def build_app(
     push_sender = BasePushNotificationSender(
         httpx_client=push_client,
         config_store=push_config_store,
-        context=ServerCallContext(),
     )
 
     handler = DefaultRequestHandler(
