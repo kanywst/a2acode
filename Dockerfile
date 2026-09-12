@@ -8,7 +8,7 @@
 # whenever Debian patches the layers underneath it, so a digest is the only
 # form of it Dependabot can see move — and the only one that builds the same
 # image twice.
-FROM node:24-trixie-slim@sha256:50c3b2f6988dfc307b86e5301d69611af31f4789bdf232863b07d3b02fe55ae0 AS node
+FROM node:24-trixie-slim@sha256:6950b66b4c0cb0151ce89fa75074673850763d096b044f422c6729b588dd4956 AS node
 
 FROM python:3.14-slim-trixie@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48aaeba60ae62a8b53525ef6
 
