@@ -259,11 +259,14 @@ CI runs these on Python 3.13 and 3.14, plus a Markdown lint, on every push and p
 
 ## Releasing
 
-Pushing a `v*` tag builds the package, creates a GitHub release with the artifacts, publishes to PyPI via trusted publishing, and pushes the container image to GHCR:
+Pushing a `v*` tag builds the package, creates a GitHub release with the artifacts, publishes to PyPI via trusted publishing, and pushes the container image to GHCR. The build takes its version from `pyproject.toml` rather than from the tag, and CI installs with `uv sync --locked`, so bump both before tagging:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+# edit pyproject.toml: version = "X.Y.Z"
+uv lock
+git commit -am "chore(release): bump version to X.Y.Z"
+git tag vX.Y.Z
+git push origin main vX.Y.Z
 ```
 
 ## Status
