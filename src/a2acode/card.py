@@ -20,7 +20,11 @@ from a2a.types import (
     AgentSkill,
     SecurityRequirement,
 )
-from a2a.utils.constants import PROTOCOL_VERSION_CURRENT, TransportProtocol
+from a2a.utils.constants import (
+    PROTOCOL_VERSION_0_3,
+    PROTOCOL_VERSION_CURRENT,
+    TransportProtocol,
+)
 
 # The id used for the bearer scheme in the card's security_schemes map and in
 # each security requirement that references it.
@@ -104,18 +108,13 @@ def build_card(
         ),
         # The server mounts both JSON-RPC and REST (HTTP+JSON) routes, so the
         # card advertises both bindings; a caller picks whichever its client
-        # speaks instead of assuming JSON-RPC.
+        # speaks instead of assuming JSON-RPC. Both also accept v0.3 requests,
+        # and listing that version is what puts the top-level url a v0.3
+        # client looks for on the served card.
         supported_interfaces=[
-            AgentInterface(
-                url=url,
-                protocol_binding=TransportProtocol.JSONRPC,
-                protocol_version=PROTOCOL_VERSION_CURRENT,
-            ),
-            AgentInterface(
-                url=url,
-                protocol_binding=TransportProtocol.HTTP_JSON,
-                protocol_version=PROTOCOL_VERSION_CURRENT,
-            ),
+            AgentInterface(url=url, protocol_binding=binding, protocol_version=v)
+            for v in (PROTOCOL_VERSION_CURRENT, PROTOCOL_VERSION_0_3)
+            for binding in (TransportProtocol.JSONRPC, TransportProtocol.HTTP_JSON)
         ],
         skills=SKILLS,
         default_input_modes=["text/plain"],

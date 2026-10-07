@@ -68,6 +68,24 @@ def test_build_app_signs_the_served_card(tmp_path):
     assert signatures[0]["protected"] and signatures[0]["signature"]
 
 
+def test_served_card_verifies_after_compat_fields():
+    from a2a.client.card_resolver import parse_agent_card
+    from starlette.testclient import TestClient
+
+    from a2acode.backends import make_backend
+
+    app = build_app(
+        make_backend("echo"),
+        url="http://x/",
+        card_signer=lambda card: sign_card(card, key=SECRET, kid="k1", alg="HS256"),
+    )
+    served = TestClient(app).get("/.well-known/agent-card.json").json()
+    # The server merges v0.3 fields into the JSON after signing; a v1.0 client
+    # must still verify the signature over what it parses back out.
+    assert served["url"] == "http://x/"
+    _verifier()(parse_agent_card(served))
+
+
 def test_signer_rejects_empty_key_file(tmp_path):
     key_file = tmp_path / "empty.key"
     key_file.write_text("   \n")

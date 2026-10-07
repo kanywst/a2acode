@@ -231,6 +231,20 @@ def test_card_advertises_jsonrpc_and_rest():
     assert TransportProtocol.HTTP_JSON in bindings
 
 
+def test_served_card_reaches_v0_3_clients():
+    from starlette.testclient import TestClient
+
+    from a2acode.backends import make_backend
+    from a2acode.server import build_app
+
+    app = build_app(make_backend("echo"), url="http://localhost:9100/")
+    served = TestClient(app).get("/.well-known/agent-card.json").json()
+    # A v0.3 client reads these top-level fields, not supportedInterfaces.
+    assert served["url"] == "http://localhost:9100/"
+    assert served["protocolVersion"] == "0.3"
+    assert served["preferredTransport"] == "JSONRPC"
+
+
 def test_card_version_tracks_package_version():
     from importlib.metadata import PackageNotFoundError, version
 

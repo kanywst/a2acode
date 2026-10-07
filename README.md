@@ -271,7 +271,7 @@ git push origin main vX.Y.Z
 
 ## Status
 
-The mapping is complete end to end and verified against real Claude: text round trip, tool calls and their outcomes, the agent's plan, streaming artifacts, file diffs as artifacts, caller attachments, run metadata, session continuity, the permission-to-`input-required` round trip, answering the agent's clarifying questions, and push notifications. The offline `echo` backend covers every path including permissions and attachments, so it can all be exercised without an API key.
+The mapping is complete end to end and verified against real Claude: text round trip, tool calls and their outcomes, the agent's plan, streaming artifacts, file diffs as artifacts, caller attachments, run metadata, session continuity, the permission-to-`input-required` round trip, answering the agent's clarifying questions, and push notifications. The server speaks A2A 1.0 and still serves v0.3 clients — the card lists both versions on the same endpoints, so a client built on a v0.3 SDK can discover it and run a task. The offline `echo` backend covers every path including permissions and attachments, so it can all be exercised without an API key.
 
 ## License
 
