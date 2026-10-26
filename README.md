@@ -2,7 +2,7 @@
 
 # a2acode
 
-Serve a coding agent over the [A2A](https://a2aprotocol.ai/) protocol. Other agents call it over A2A; it drives a real coding-agent session in your project — Claude Code, or any agent that speaks Zed's [Agent Client Protocol](https://agentclientprotocol.com) (ACP): Gemini CLI, Codex, OpenHands, and more — and streams the work back as it happens.
+Put Claude Code, Codex, Gemini CLI — any coding agent that speaks Zed's [Agent Client Protocol](https://agentclientprotocol.com) (ACP) — behind the [A2A](https://a2aprotocol.ai/) protocol, and keep what most adapters throw away: the tools it runs, the diffs it writes, the approvals it needs, and what it costs. Other agents discover it through its agent card, delegate coding work, and get the run streamed back as it happens — with every permission prompt routed to the caller as an A2A `input-required` pause.
 
 [![CI](https://github.com/kanywst/a2acode/actions/workflows/ci.yml/badge.svg)](https://github.com/kanywst/a2acode/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
@@ -10,6 +10,13 @@ Serve a coding agent over the [A2A](https://a2aprotocol.ai/) protocol. Other age
 [![Protocol: A2A 1.0](https://img.shields.io/badge/protocol-A2A%201.0-D97757.svg)](https://a2aprotocol.ai/)
 
 ![a2acode streaming a task, then pausing on a permission prompt](assets/demo.gif)
+
+Try it in ten seconds, no clone and no API key (the `echo` backend mirrors the prompt):
+
+```bash
+uvx a2acode serve --backend echo &
+uvx a2acode call "fix the failing test"
+```
 
 Most adapters that put a coding agent behind A2A flatten everything to text in, text out. a2acode keeps the structure the agent produces: the tools it runs, the files it changes, what it costs, the approvals it needs, and how to continue on the next turn. It bridges two Linux Foundation interop standards — **ACP** (how editors and clients talk to coding agents) on the agent side, **A2A** (how agents delegate to each other) on the caller side — so any ACP agent becomes a peer any A2A orchestrator can call.
 
@@ -59,18 +66,12 @@ Or point `--agent-command` at any other ACP agent.
 
 ## Quick start
 
-Install:
+a2acode is on PyPI, so [`uvx`](https://docs.astral.sh/uv/guides/tools/) runs it without a clone or an install step (`uv tool install a2acode` or `pipx install a2acode` keep it around). The `echo` backend needs no API key and no Claude install, so you can exercise the whole path offline first:
 
 ```bash
-uv sync
-```
-
-The `echo` backend needs no API key and no Claude install, so you can exercise the whole path offline first:
-
-```bash
-uv run a2acode serve --backend echo &
+uvx a2acode serve --backend echo &
 # once the "Uvicorn running" line appears:
-uv run a2acode call "fix the failing test"
+uvx a2acode call "fix the failing test"
 ```
 
 ```text
@@ -78,6 +79,7 @@ task 189b1c63-1a7b-4908-87c4-c8f3bba8f6b5
 context 0b2a901e-2b6f-4c56-bba2-d0da546936e9
 
   · Echo
+  · ✓ Echo
 fix the failing test
 [completed] $0.0 · 1 turns
 ```
@@ -85,21 +87,21 @@ fix the failing test
 Then point it at a real project. The default backend is `acp`, fronting Claude Code through its ACP adapter:
 
 ```bash
-uv run a2acode serve --cwd /path/to/project          # acp + claude by default
-uv run a2acode call "add a /health endpoint" --url http://localhost:9100/
+uvx a2acode serve --cwd /path/to/project          # acp + claude by default
+uvx a2acode call "add a /health endpoint" --url http://localhost:9100/
 ```
 
 Swap the agent without touching anything else:
 
 ```bash
-uv run a2acode serve --agent gemini --cwd /path/to/project
-uv run a2acode serve --agent-command "npx -y some-other-acp-agent"
+uvx a2acode serve --agent gemini --cwd /path/to/project
+uvx a2acode serve --agent-command "npx -y some-other-acp-agent"
 ```
 
 Continue the same conversation by passing the `context` from a previous turn:
 
 ```bash
-uv run a2acode call "now add a test for it" --context <context-id>
+uvx a2acode call "now add a test for it" --context <context-id>
 ```
 
 Continuity needs the agent to support ACP's `session/load`. When it does not, the turn still runs, but on a fresh session — and the task says so in a status update rather than answering as if it remembered.
@@ -108,7 +110,7 @@ Continuity needs the agent to support ACP's `session/load`. When it does not, th
 
 Every release publishes a `linux/amd64` and `linux/arm64` image to GHCR, holding the same wheel as the PyPI release with all three extras installed — so which backend and which task store it runs is a flag, not a rebuild. It runs as a non-root user and works in your project by way of whatever you mount over `/workspace`.
 
-A container has to listen on every interface to be reachable at all, so the default command binds `0.0.0.0` where the `uv run` quick start binds loopback. That makes *where you publish the port* the boundary: whoever reaches it can run a coding agent in your workspace. Publish it to your own loopback while you try it out —
+A container has to listen on every interface to be reachable at all, so the default command binds `0.0.0.0` where the `uvx` quick start binds loopback. That makes *where you publish the port* the boundary: whoever reaches it can run a coding agent in your workspace. Publish it to your own loopback while you try it out —
 
 ```bash
 docker run --rm -p 127.0.0.1:9100:9100 \
@@ -152,7 +154,7 @@ An A2A message is not only text. A caller can attach the failing log, the patch 
 A backend turns a prompt into a stream of normalized events. Three ship today:
 
 - `acp` (default): drives any agent that speaks Zed's Agent Client Protocol as a subprocess. `--agent claude|gemini|codex` selects a launch preset; `--agent-command` drives any other ACP agent. This is the vendor-neutral path. The subprocess is kept alive per conversation, so a follow-up turn skips the process launch, the ACP handshake, and the session reload and talks straight to the agent that already holds the conversation.
-- `claude`: drives Claude Code directly through the Claude Agent SDK, no subprocess. Install with `uv sync --extra claude`. Use it when you want the SDK-native path (e.g. `--max-budget-usd`) rather than ACP.
+- `claude`: drives Claude Code directly through the Claude Agent SDK, no subprocess. Install with `uv tool install 'a2acode[claude]'` (or `uv sync --extra claude` from a clone). Use it when you want the SDK-native path (e.g. `--max-budget-usd`) rather than ACP.
 - `echo`: no dependencies, mirrors the input. For wiring checks and tests.
 
 The split keeps the A2A layer independent of how the agent is invoked: backends emit normalized events and never import `a2a.*`; the executor maps those events onto the protocol and never imports an agent SDK. Adding a backend never touches the server or the protocol mapping.
@@ -166,7 +168,7 @@ Each agent authenticates the way its own tooling does, inherited from the server
 A caller that discovers this server only has the agent card to go on. Sign it so the caller can confirm the card came from you and was not swapped in transit:
 
 ```bash
-uv run a2acode serve --sign-key card-signing.pem --sign-kid my-key-1 --sign-alg ES256
+uvx a2acode serve --sign-key card-signing.pem --sign-kid my-key-1 --sign-alg ES256
 ```
 
 The card is then served with a JWS signature over its canonical form. `--sign-key` is a path to a file holding the key: a PEM private key for asymmetric algorithms (`ES256`, `RS256`), or a shared secret for `HS256`. `--sign-kid` is the key id a verifier uses to look up the matching public key. Unsigned is still the default.
@@ -176,7 +178,7 @@ The card is then served with a JWS signature over its canonical form. `--sign-ke
 A signed card proves who the server is; this proves the caller is allowed in. Require a bearer token and the server rejects any task request that does not carry it:
 
 ```bash
-uv run a2acode serve --auth-token-file caller-token.txt
+uvx a2acode serve --auth-token-file caller-token.txt
 ```
 
 When `--auth-token-file` is set, callers must send `Authorization: Bearer <token>`; a request without a valid token gets `401 Unauthorized`. The agent card stays public so a caller can still fetch it to discover the requirement, and the card advertises the bearer scheme in `securitySchemes`. Without the flag the server stays open, as before.
@@ -188,10 +190,10 @@ A2A keeps the credential at the HTTP layer, so this composes with whatever your 
 A tool that needs approval pauses the task in the A2A `input-required` state instead of being skipped. The caller answers with a follow-up message on the same task:
 
 ```bash
-uv run a2acode call "sudo reboot"
+uvx a2acode call "sudo reboot"
 # ... [input-required] Permission requested for Bash: $ sudo reboot
 #       reply: a2acode call "allow" --task <id> --context <id> --request <id>
-uv run a2acode call "allow" --task <id> --context <id> --request <id>
+uvx a2acode call "allow" --task <id> --context <id> --request <id>
 ```
 
 An answer of `allow`, `yes`, `y`, `ok`, `approve`, `accept`, or `grant` — the whole answer, nothing around it — approves. Anything else denies, which is what makes it safe to answer in prose. The agent session stays alive across the pause, so it resumes exactly where it stopped. Over ACP this is the agent's `session/request_permission` call answered from the A2A caller's reply; with the `claude` backend it routes through the Claude SDK's `can_use_tool`.
@@ -203,12 +205,12 @@ Some gates are not yes/no. Claude Code's end-of-plan gate offers three choices �
 Not every gate is a request to act. When Claude has a clarifying question it calls `AskUserQuestion`, which asks and does nothing else, so approving it says nothing on its own — the answer is the outcome. The pause carries the questions and their choices, and the reply's metadata carries what was picked, keyed by question:
 
 ```bash
-uv run a2acode call "port the tests" --url http://localhost:9100/
+uvx a2acode call "port the tests" --url http://localhost:9100/
 # ... [input-required] Permission requested for AskUserQuestion: ...
 #       Which test runner?  [Runner]
 #           pytest: what the repo uses
 #           unittest: stdlib only
-uv run a2acode call "allow" --task <id> --context <id> --request <id> \
+uvx a2acode call "allow" --task <id> --context <id> --request <id> \
   --answer "Which test runner?=pytest"
 ```
 
@@ -229,8 +231,7 @@ The agent card advertises push notifications. A caller can register a webhook fo
 Tasks live in memory by default, so a restart loses their history and any webhook registrations. Point `--task-db` at a database to keep them:
 
 ```bash
-uv sync --extra persistence
-uv run a2acode serve --task-db "sqlite+aiosqlite:///a2acode.db"
+uvx --from 'a2acode[persistence]' a2acode serve --task-db "sqlite+aiosqlite:///a2acode.db"
 ```
 
 Any SQLAlchemy async DSN works; the extra ships the SQLite driver because it needs no server. What survives is task history, artifacts, and push registrations — **not** a live agent session, which is a process and dies with the server either way, so a task paused on a permission cannot be answered after a restart.
@@ -240,7 +241,7 @@ Any SQLAlchemy async DSN works; the extra ships the SQLite driver because it nee
 Debugging one agent is hard; debugging a chain of them without traces is worse. Because A2A runs over HTTP, it drops straight into OpenTelemetry: install the extra and the A2A SDK's instrumentation plus a per-task `a2acode.execute` span light up, with W3C trace context propagating across the call so client and server spans share one trace.
 
 ```bash
-uv sync --extra telemetry
+uv tool install 'a2acode[telemetry]'   # or: uv sync --extra telemetry
 ```
 
 Tracing is off unless OpenTelemetry is installed, and you configure the exporter the standard way (e.g. `OTEL_EXPORTER_OTLP_ENDPOINT`, or run under `opentelemetry-instrument`). It works against an on-prem or air-gapped collector, so traces never have to leave your network.
