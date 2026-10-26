@@ -6,7 +6,7 @@ Put Claude Code, Codex, Gemini CLI — any coding agent that speaks Zed's [Agent
 
 [![CI](https://github.com/kanywst/a2acode/actions/workflows/ci.yml/badge.svg)](https://github.com/kanywst/a2acode/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![Protocol: A2A 1.0](https://img.shields.io/badge/protocol-A2A%201.0-D97757.svg)](https://a2aprotocol.ai/)
 
 ![a2acode streaming a task, then pausing on a permission prompt](assets/demo.gif)
@@ -50,7 +50,7 @@ ACP already standardizes the editor↔agent side and a dozen agents speak it; a2
 
 ## Requirements
 
-- Python 3.13+
+- Python 3.11+
 - [uv](https://docs.astral.sh/uv/)
 - An ACP agent adapter for the `acp` backend, launched as a subprocess. Every preset launches one with `npx`, so Node is the only prerequisite besides that agent's own credential:
 
@@ -256,7 +256,7 @@ uv run mypy
 uv run pytest
 ```
 
-CI runs these on Python 3.13 and 3.14, plus a Markdown lint, on every push and pull request.
+CI runs these on Python 3.11 through 3.14, plus a Markdown lint, on every push and pull request.
 
 ## Releasing
 
