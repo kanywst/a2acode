@@ -15,6 +15,7 @@ Try it in ten seconds, no clone and no API key (the `echo` backend mirrors the p
 
 ```bash
 uvx a2acode serve --backend echo &
+# once the "Uvicorn running" line appears:
 uvx a2acode call "fix the failing test"
 ```
 
