@@ -21,7 +21,7 @@ uv run pytest -k permission        # tests matching a name
 uv build                           # build the package
 ```
 
-CI (`.github/workflows/ci.yml`) runs lint, format-check, mypy, pytest, and build on Python 3.13 and 3.14, plus `markdownlint-cli2`. `uv sync --locked` must succeed, so keep `uv.lock` current when changing dependencies.
+CI (`.github/workflows/ci.yml`) runs lint, format-check, mypy, pytest, and build on Python 3.11 through 3.14, plus `markdownlint-cli2`. `uv sync --locked` must succeed, so keep `uv.lock` current when changing dependencies.
 
 Run the server end to end without an API key using the `echo` backend:
 
@@ -113,7 +113,7 @@ Not every gate asks to *act*: `AskUserQuestion` only asks, so an approval alone 
 
 - **Keep the layering intact.** If you reach for `acp`/`claude_agent_sdk` outside their own backend module, or for `a2a.*` inside a backend, that's the wrong layer.
 - **The translation functions are pure and side-effect free** — `events_from_message` (claude), `events_from_update` + `select_option` + `prompt_blocks` (acp), `diff.py`, and `attach.py` — so the protocol mapping is unit-testable without a live agent. Keep them that way; stateful concerns (cost capture, permission parking, the agent pool) live in the backend's `Client`/`drive`, not the translator.
-- Python 3.13+, full type hints, `from __future__ import annotations`. Ruff enforces `E, F, I, UP, B, SIM` at line length 88.
+- Python 3.11+, full type hints, `from __future__ import annotations`. Ruff enforces `E, F, I, UP, B, SIM` at line length 88.
 - The `acp` and `claude` backends are imported lazily (`make_backend`) so `echo` works without their runtime deps. The Claude SDK is an optional extra (`a2acode[claude]`). New optional backends should follow the same lazy pattern.
 
 ## Reference material
