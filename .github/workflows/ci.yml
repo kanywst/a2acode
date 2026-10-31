@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "0 3 * * 1"
 
 permissions:
   contents: read
@@ -45,6 +47,40 @@ jobs:
 
       - name: Build
         run: uv build
+
+  # The lock pins one point inside each declared range, but a PyPI install
+  # resolves afresh: the newest releases today, or any floor a user's other
+  # pins force. Testing only the lock let a floor admit a release the acp
+  # backend breaks on, and an upstream release break a published version with
+  # nothing in CI noticing until the lock was bumped. The schedule is what
+  # catches the second case on a week with no commits.
+  resolution:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - resolution: lowest-direct
+            python-version: "3.11"
+          - resolution: highest
+            python-version: "3.14"
+    name: resolution (${{ matrix.resolution }})
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Sync (resolved afresh, ignoring the lock)
+        run: uv sync --dev --upgrade --resolution ${{ matrix.resolution }}
+
+      - name: Show what resolved
+        run: uv pip list | grep -iE '^(a2a-sdk|agent-client-protocol|claude-agent-sdk|uvicorn|httpx|typer) '
+
+      - name: Test
+        run: uv run --no-sync pytest -q
 
   image:
     runs-on: ubuntu-latest

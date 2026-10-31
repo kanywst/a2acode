@@ -21,7 +21,7 @@ uv run pytest -k permission        # tests matching a name
 uv build                           # build the package
 ```
 
-CI (`.github/workflows/ci.yml`) runs lint, format-check, mypy, pytest, and build on Python 3.11 through 3.14, plus `markdownlint-cli2`. `uv sync --locked` must succeed, so keep `uv.lock` current when changing dependencies.
+CI (`.github/workflows/ci.yml`) runs lint, format-check, mypy, pytest, and build on Python 3.11 through 3.14, plus `markdownlint-cli2`. `uv sync --locked` must succeed, so keep `uv.lock` current when changing dependencies. A `resolution` job also ignores the lock and tests the declared ranges at both ends (`lowest-direct` on 3.11, `highest` on 3.14), weekly as well as per PR, so a floor that admits a broken release or an upstream release that breaks a published version fails CI instead of a user's install.
 
 Run the server end to end without an API key using the `echo` backend:
 
