@@ -257,7 +257,7 @@ uv run mypy
 uv run pytest
 ```
 
-CI runs these on Python 3.11 through 3.14, plus a Markdown lint, on every push and pull request.
+CI runs these on Python 3.11 through 3.15, plus a Markdown lint, on every push and pull request.
 
 ## Releasing
 
