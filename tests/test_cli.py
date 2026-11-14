@@ -122,3 +122,22 @@ def test_input_required_lists_the_questions_and_how_to_answer(
     assert "\x1b" not in out
     assert "pytest: fast" in out
     assert "--answer 'Which runner?\\x1b[2K=<choice>'" in out
+
+
+@patch("a2acode.cli.uvicorn.run")
+def test_serve_log_names_the_agent_command(mock_run: MagicMock) -> None:
+    # With --agent-command the startup line must name that command, not the
+    # default preset, or the log claims Claude Code when something else runs.
+    result = runner.invoke(
+        app, ["serve", "--agent-command", "python tests/fake_agent.py"]
+    )
+    assert result.exit_code == 0
+    assert "backend=acp:python " in result.output
+    assert "acp:claude" not in result.output
+
+
+@patch("a2acode.cli.uvicorn.run")
+def test_serve_log_names_the_preset(mock_run: MagicMock) -> None:
+    result = runner.invoke(app, ["serve", "--agent", "codex"])
+    assert result.exit_code == 0
+    assert "backend=acp:codex " in result.output
