@@ -11,7 +11,8 @@ import asyncio
 from contextlib import AsyncExitStack, suppress
 
 import pytest
-from acp import (
+from acp import schema as s
+from acp_blocks import (
     image_block,
     plan_entry,
     text_block,
@@ -19,7 +20,6 @@ from acp import (
     tool_diff_content,
     update_plan,
 )
-from acp import schema as s
 
 from a2acode.backends import acp as acp_mod
 from a2acode.backends.acp import (
