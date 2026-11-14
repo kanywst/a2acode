@@ -212,7 +212,12 @@ def serve(
         auth_token=auth_token,
         task_db=task_db,
     )
-    label = f"{backend}:{agent}" if backend == "acp" else backend
+    if backend != "acp":
+        label = backend
+    elif agent_command:
+        label = f"acp:{shlex.split(agent_command)[0]}"
+    else:
+        label = f"acp:{agent}"
     typer.echo(f"a2acode: backend={label} card={_local_url(host, port)}")
     uvicorn.run(asgi_app, host=host, port=port, log_level="info")
 
