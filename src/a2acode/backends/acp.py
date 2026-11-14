@@ -50,13 +50,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from acp import (
-    PROTOCOL_VERSION,
-    Client,
-    image_block,
-    spawn_agent_process,
-    text_block,
-)
+from acp import PROTOCOL_VERSION, Client, spawn_agent_process
 from acp import schema as s
 from acp.exceptions import RequestError
 
@@ -234,14 +228,18 @@ def prompt_blocks(
             and attachment.media_type.startswith("image/")
         ):
             images.append(
-                image_block(
-                    base64.b64encode(attachment.data).decode("ascii"),
-                    attachment.media_type,
+                s.ImageContentBlock(
+                    type="image",
+                    data=base64.b64encode(attachment.data).decode("ascii"),
+                    mime_type=attachment.media_type,
                 )
             )
         else:
             inlined.append(attachment)
-    return [text_block(append_to_prompt(request.prompt, inlined)), *images]
+    text = s.TextContentBlock(
+        type="text", text=append_to_prompt(request.prompt, inlined)
+    )
+    return [text, *images]
 
 
 def _plan_content(plan: object) -> Plan:

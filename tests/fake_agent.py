@@ -19,6 +19,17 @@ from typing import Any
 
 import acp
 from acp import schema as s
+from acp_blocks import (
+    plan_entry,
+    start_tool_call,
+    text_block,
+    tool_content,
+    tool_diff_content,
+    update_agent_message_text,
+    update_agent_thought_text,
+    update_plan,
+    update_tool_call,
+)
 
 # Sessions this process has opened, so a test can prove the same process served
 # two turns rather than a fresh one being spawned per turn.
@@ -56,18 +67,18 @@ class FakeAgent:
         text = " ".join(getattr(b, "text", "") for b in prompt)
         created = None
 
-        await self._update(session_id, acp.update_agent_thought_text("considering"))
+        await self._update(session_id, update_agent_thought_text("considering"))
         await self._update(
-            session_id, acp.update_agent_message_text(f"turn {self._turns}: ")
+            session_id, update_agent_message_text(f"turn {self._turns}: ")
         )
 
         if "plan" in text:
             await self._update(
                 session_id,
-                acp.update_plan(
+                update_plan(
                     [
-                        acp.plan_entry("look", status="completed"),
-                        acp.plan_entry("fix", status="in_progress"),
+                        plan_entry("look", status="completed"),
+                        plan_entry("fix", status="in_progress"),
                     ]
                 ),
             )
@@ -75,20 +86,20 @@ class FakeAgent:
         if "edit" in text:
             await self._update(
                 session_id,
-                acp.start_tool_call(
+                start_tool_call(
                     "t1",
                     "Write calc.py",
                     kind="edit",
                     raw_input={"file_path": "calc.py"},
-                    content=[acp.tool_diff_content("calc.py", "b\n", "a\n")],
+                    content=[tool_diff_content("calc.py", "b\n", "a\n")],
                 ),
             )
             await self._update(
                 session_id,
-                acp.update_tool_call(
+                update_tool_call(
                     "t1",
                     status="completed",
-                    content=[acp.tool_content(acp.text_block("written"))],
+                    content=[tool_content(text_block("written"))],
                 ),
             )
 
@@ -96,32 +107,28 @@ class FakeAgent:
             # A tool call the way a real agent reports one: announced before its
             # arguments are parsed, refined twice, then completed.
             await self._update(
-                session_id, acp.start_tool_call("t4", "Read File", kind="read")
+                session_id, start_tool_call("t4", "Read File", kind="read")
             )
             await self._update(
                 session_id,
-                acp.update_tool_call(
+                update_tool_call(
                     "t4", title="Read app.py", raw_input={"file_path": "app.py"}
                 ),
             )
-            await self._update(session_id, acp.update_tool_call("t4"))
-            await self._update(
-                session_id, acp.update_tool_call("t4", status="completed")
-            )
+            await self._update(session_id, update_tool_call("t4"))
+            await self._update(session_id, update_tool_call("t4", status="completed"))
 
         if "boom" in text:
             await self._update(
                 session_id,
-                acp.start_tool_call("t2", "Run tests", kind="execute"),
+                start_tool_call("t2", "Run tests", kind="execute"),
             )
             await self._update(
                 session_id,
-                acp.update_tool_call(
+                update_tool_call(
                     "t2",
                     status="failed",
-                    content=[
-                        acp.tool_content(acp.text_block("2 tests failed\ndetail"))
-                    ],
+                    content=[tool_content(text_block("2 tests failed\ndetail"))],
                 ),
             )
 
@@ -138,7 +145,7 @@ class FakeAgent:
             )
             chosen = getattr(outcome.outcome, "option_id", "cancelled")
             await self._update(
-                session_id, acp.update_agent_message_text(f"permission={chosen} ")
+                session_id, update_agent_message_text(f"permission={chosen} ")
             )
 
         if "shell" in text:
@@ -151,7 +158,7 @@ class FakeAgent:
             except Exception:
                 # A real agent carries on after a refusal rather than dying.
                 await self._update(
-                    session_id, acp.update_agent_message_text("shell refused ")
+                    session_id, update_agent_message_text("shell refused ")
                 )
                 created = None
         if "shell" in text and created is not None:
@@ -166,7 +173,7 @@ class FakeAgent:
             )
             await self._update(
                 session_id,
-                acp.update_agent_message_text(f"shell said {out.output.strip()} "),
+                update_agent_message_text(f"shell said {out.output.strip()} "),
             )
 
         if "readfile" in text:
@@ -175,12 +182,10 @@ class FakeAgent:
             )
             await self._update(
                 session_id,
-                acp.update_agent_message_text(
-                    f"file has {len(content.content)} chars "
-                ),
+                update_agent_message_text(f"file has {len(content.content)} chars "),
             )
 
-        await self._update(session_id, acp.update_agent_message_text("done"))
+        await self._update(session_id, update_agent_message_text("done"))
         return s.PromptResponse(
             stop_reason="end_turn",
             usage=s.Usage(total_tokens=42, input_tokens=20, output_tokens=22),
