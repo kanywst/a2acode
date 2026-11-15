@@ -2,7 +2,7 @@
 
 # a2acode
 
-Put Claude Code, Codex, Gemini CLI — any coding agent that speaks Zed's [Agent Client Protocol](https://agentclientprotocol.com) (ACP) — behind the [A2A](https://a2aprotocol.ai/) protocol, and keep what most adapters throw away: the tools it runs, the diffs it writes, the approvals it needs, and what it costs. Other agents discover it through its agent card, delegate coding work, and get the run streamed back as it happens — with every permission prompt routed to the caller as an A2A `input-required` pause.
+Put Claude Code, Codex, opencode — any coding agent that speaks Zed's [Agent Client Protocol](https://agentclientprotocol.com) (ACP) — behind the [A2A](https://a2aprotocol.ai/) protocol, and keep what most adapters throw away: the tools it runs, the diffs it writes, the approvals it needs, and what it costs. Other agents discover it through its agent card, delegate coding work, and get the run streamed back as it happens — with every permission prompt routed to the caller as an A2A `input-required` pause.
 
 [![CI](https://github.com/kanywst/a2acode/actions/workflows/ci.yml/badge.svg)](https://github.com/kanywst/a2acode/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
@@ -45,9 +45,11 @@ a2acode solves a different problem: making any coding agent a first-class peer o
 
 - another agent (not a human at a prompt) is the caller, and it speaks A2A;
 - you want the run on your own infrastructure and data boundary, not a vendor VM;
-- you do not want to bet on one vendor's coding agent: ACP makes the backend a launch-command choice, so swapping Claude Code for Codex, Gemini CLI, or OpenHands does not touch the protocol surface your callers depend on.
+- you do not want to bet on one vendor's coding agent: ACP makes the backend a launch-command choice, so swapping Claude Code for Codex, Gemini CLI, or opencode does not touch the protocol surface your callers depend on.
 
 ACP already standardizes the editor↔agent side and a dozen agents speak it; a2acode is the piece that exposes an ACP agent to *remote autonomous callers* over A2A, with permission round-trips and cost preserved as first-class protocol citizens — the part ACP leaves out because it assumes a human in an editor. The practical user is the platform team building that mesh, not the individual developer.
+
+[a2a-serve](https://github.com/a2aproject/a2a-serve), from the A2A project, also puts ACP coding agents behind A2A. It is a full product: a Docker sandbox per caller, Telegram/Discord/email front ends, relays and tailnets, pairing codes. a2acode is narrower — one Python package you can `uvx`, no Docker, nothing between the caller and the agent but the protocol mapping. Pick a2a-serve if you want the hosting done for you; pick a2acode if you already have the hosting and want a bridge you can read in an afternoon, a Claude Agent SDK backend next to the ACP one, and permission answers bound to the exact prompt they name (`requestId`, `option:<id>`, answers to `AskUserQuestion`).
 
 ## Requirements
 
