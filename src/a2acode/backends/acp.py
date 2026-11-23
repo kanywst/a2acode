@@ -143,9 +143,8 @@ def events_from_update(update: object) -> Iterator[BackendEvent]:
         yield _plan_content(update.plan)
     elif isinstance(update, s.CurrentModeUpdate):
         yield Notice(text=f"the agent switched to {update.current_mode_id} mode")
-    elif isinstance(update, s.SessionInfoUpdate):
-        if update.title:
-            yield Notice(text=f"the agent titled this session {update.title!r}")
+    elif isinstance(update, s.SessionInfoUpdate) and update.title:
+        yield Notice(text=f"the agent titled this session {update.title!r}")
 
 
 def select_option(
